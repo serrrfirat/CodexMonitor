@@ -420,6 +420,17 @@
   color: var(--text-strong);
 }
 
+.thread-row-session .thread-menu-trigger {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-row.active .thread-menu-trigger,
+.thread-row:focus-within .thread-menu-trigger {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .thread-row:hover .thread-menu-trigger {
   opacity: 1;
   pointer-events: auto;

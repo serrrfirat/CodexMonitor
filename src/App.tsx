@@ -13,6 +13,7 @@ import "./styles/diff.css";
 import "./styles/diff-viewer.css";
 import "./styles/debug.css";
 import "./styles/plan.css";
+import "./styles/handoff-tldr.css";
 import "./styles/about.css";
 import "./styles/tabbar.css";
 import "./styles/worktree-modal.css";
@@ -33,6 +34,7 @@ import { GitDiffPanel } from "./components/GitDiffPanel";
 import { GitDiffViewer } from "./components/GitDiffViewer";
 import { DebugPanel } from "./components/DebugPanel";
 import { PlanPanel } from "./components/PlanPanel";
+import { HandoffTldrCard } from "./components/HandoffTldr";
 import { AboutView } from "./components/AboutView";
 import { TabBar } from "./components/TabBar";
 import { TabletNav } from "./components/TabletNav";
@@ -59,6 +61,7 @@ import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLayoutMode } from "./hooks/useLayoutMode";
 import { useAppSettings } from "./hooks/useAppSettings";
 import { useUpdater } from "./hooks/useUpdater";
+import { useHandoffTldr } from "./hooks/useHandoffTldr";
 import type { AccessMode, BackendType, QueuedMessage, WorkspaceInfo } from "./types";
 
 function useWindowLabel() {
@@ -244,26 +247,20 @@ function MainApp() {
 
   const {
     activeSessionId,
-    sessions,
+    sessionsByWorkspace,
+    sessionStatusById,
     items: openCodeActiveItems,
     plan: openCodePlan,
     isProcessing: openCodeIsProcessing,
-    hasUnread: openCodeHasUnread,
     startSession,
     switchSession,
     sendMessage: sendOpenCodeMessage,
     cancelCurrentOperation,
+    archiveSession: archiveOpenCodeSession,
   } = useSessions(activeWorkspace);
 
   const isOpenCodeMode = Boolean(activeSessionId) && !activeThreadId;
   const activeItems = isOpenCodeMode ? openCodeActiveItems : codexActiveItems;
-
-  const sessionsByWorkspace = activeWorkspaceId
-    ? { [activeWorkspaceId]: sessions }
-    : {};
-  const sessionStatusById = activeSessionId
-    ? { [activeSessionId]: { isProcessing: openCodeIsProcessing, hasUnread: openCodeHasUnread } }
-    : {};
 
   const activeRateLimits = activeWorkspaceId
     ? rateLimitsByWorkspace[activeWorkspaceId] ?? null
@@ -298,6 +295,18 @@ function MainApp() {
     : activeThreadId
       ? threadStatusById[activeThreadId]?.isReviewing ?? false
       : false;
+
+  const activeHandoffKind = isOpenCodeMode ? "session" : "thread";
+  const activeHandoffId = isOpenCodeMode ? activeSessionId : activeThreadId;
+  const { tldr: handoffTldr } = useHandoffTldr({
+    workspaceId: activeWorkspaceId,
+    kind: activeHandoffKind,
+    id: activeHandoffId,
+    plan: activePlan,
+    isProcessing,
+    hasMessages: activeItems.length > 0,
+  });
+
   const activeQueue = activeThreadId
     ? queuedByThread[activeThreadId] ?? []
     : [];
@@ -660,6 +669,9 @@ function MainApp() {
       onDeleteThread={(workspaceId, threadId) => {
         removeThread(workspaceId, threadId);
       }}
+      onDeleteSession={(workspaceId, sessionId) => {
+        void archiveOpenCodeSession(workspaceId, sessionId);
+      }}
       onDeleteWorkspace={(workspaceId) => {
         void removeWorkspace(workspaceId);
       }}
@@ -673,9 +685,27 @@ function MainApp() {
     <Messages
       items={activeItems}
       isThinking={
-        activeThreadId ? threadStatusById[activeThreadId]?.isProcessing ?? false : false
+        isOpenCodeMode
+          ? openCodeIsProcessing
+          : activeThreadId
+            ? threadStatusById[activeThreadId]?.isProcessing ?? false
+            : false
       }
     />
+  );
+
+  const conversationNode = handoffTldr ? (
+    <div className="conversation-stack">
+      <HandoffTldrCard
+        tldr={handoffTldr}
+        isProcessing={isProcessing}
+        kind={activeHandoffKind}
+        plan={activePlan}
+      />
+      {messagesNode}
+    </div>
+  ) : (
+    messagesNode
   );
 
   const handleStop = isOpenCodeMode ? cancelCurrentOperation : interruptTurn;
@@ -812,7 +842,7 @@ function MainApp() {
                   error={diffError}
                 />
               ) : (
-                messagesNode
+                conversationNode
               )}
             </div>
 
@@ -920,7 +950,7 @@ function MainApp() {
             {tabletTab === "codex" && (
               <>
                 <div className="content tablet-content">
-                  {messagesNode}
+                  {conversationNode}
                 </div>
                 {composerNode}
               </>
@@ -1004,7 +1034,7 @@ function MainApp() {
                 <div className="actions" />
               </div>
               <div className="content compact-content">
-                {messagesNode}
+                {conversationNode}
               </div>
               {composerNode}
             </>

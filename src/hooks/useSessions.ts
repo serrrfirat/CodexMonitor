@@ -11,6 +11,7 @@ import type {
 import {
   listOpenCodeSessions,
   createOpenCodeSession,
+  deleteOpenCodeSession,
   sendOpenCodeMessage,
   cancelOpenCodeOperation,
 } from "../services/tauri";
@@ -536,6 +537,24 @@ export function useSessions(
 
   const plan = activeSessionId ? state.planBySession[activeSessionId] ?? null : null;
 
+  const refreshSessions = useCallback(async () => {
+    if (!workspaceId) return;
+
+    dispatch({ type: "setSessionListLoading", workspaceId, isLoading: true });
+    try {
+      const sessionList = await listOpenCodeSessions(workspaceId);
+      const summaries: SessionSummary[] = sessionList.map((s) => ({
+        id: s.id,
+        title: s.title || "Untitled Session",
+      }));
+      dispatch({ type: "setSessions", workspaceId, sessions: summaries });
+    } catch (error) {
+      console.error("[useSessions] Failed to refresh sessions:", error);
+    } finally {
+      dispatch({ type: "setSessionListLoading", workspaceId, isLoading: false });
+    }
+  }, [workspaceId]);
+
   useEffect(() => {
     if (!workspaceId) {
       return;
@@ -819,6 +838,7 @@ export function useSessions(
     };
 
     setupEventListener();
+    void refreshSessions();
 
     return () => {
       if (unlistenRef.current) {
@@ -918,38 +938,36 @@ export function useSessions(
     }
   }, [workspaceId, activeSessionId]);
 
-  const refreshSessions = useCallback(async () => {
-    if (!workspaceId) return;
-
-    dispatch({ type: "setSessionListLoading", workspaceId, isLoading: true });
+  const archiveSession = useCallback(async (targetWorkspaceId: string, sessionId: string) => {
     try {
-      const sessionList = await listOpenCodeSessions(workspaceId);
-      const summaries: SessionSummary[] = sessionList.map((s) => ({
-        id: s.id,
-        title: s.title || "Untitled Session",
-      }));
-      dispatch({ type: "setSessions", workspaceId, sessions: summaries });
+      await deleteOpenCodeSession(targetWorkspaceId, sessionId);
     } catch (error) {
-      console.error("[useSessions] Failed to refresh sessions:", error);
+      console.error("[useSessions] Failed to delete session:", error);
     } finally {
-      dispatch({ type: "setSessionListLoading", workspaceId, isLoading: false });
+      dispatch({ type: "removeSession", workspaceId: targetWorkspaceId, sessionId });
+      dispatch({ type: "setActiveSessionId", workspaceId: targetWorkspaceId, sessionId: null });
     }
-  }, [workspaceId]);
+  }, []);
 
   return {
     activeSessionId,
+    activeSessionIdByWorkspace: state.activeSessionIdByWorkspace,
     sessions,
+    sessionsByWorkspace: state.sessionsByWorkspace,
     items,
     plan,
     isProcessing: sessionStatus.isProcessing,
     hasUnread: sessionStatus.hasUnread,
+    sessionStatusById: state.sessionStatusById,
     isSessionListLoading,
+    sessionListLoadingByWorkspace: state.sessionListLoadingByWorkspace,
 
     startSession,
     switchSession,
     sendMessage,
     cancelCurrentOperation,
     refreshSessions,
+    archiveSession,
 
     dispatch,
   };

@@ -36,6 +36,7 @@ type SidebarProps = {
   onSelectThread: (workspaceId: string, threadId: string) => void;
   onSelectSession: (workspaceId: string, sessionId: string) => void;
   onDeleteThread: (workspaceId: string, threadId: string) => void;
+  onDeleteSession: (workspaceId: string, sessionId: string) => void;
   onDeleteWorkspace: (workspaceId: string) => void;
   onDeleteWorktree: (workspaceId: string) => void;
 };
@@ -64,6 +65,7 @@ export function Sidebar({
   onSelectThread,
   onSelectSession,
   onDeleteThread,
+  onDeleteSession,
   onDeleteWorkspace,
   onDeleteWorktree,
 }: SidebarProps) {
@@ -135,6 +137,29 @@ export function Sidebar({
       text: "Copy ID",
       action: async () => {
         await navigator.clipboard.writeText(threadId);
+      },
+    });
+    const menu = await Menu.new({ items: [copyItem, archiveItem] });
+    const window = getCurrentWindow();
+    const position = new LogicalPosition(event.clientX, event.clientY);
+    await menu.popup(position, window);
+  }
+
+  async function showSessionMenu(
+    event: React.MouseEvent,
+    workspaceId: string,
+    sessionId: string,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const archiveItem = await MenuItem.new({
+      text: "Archive",
+      action: () => onDeleteSession(workspaceId, sessionId),
+    });
+    const copyItem = await MenuItem.new({
+      text: "Copy ID",
+      action: async () => {
+        await navigator.clipboard.writeText(sessionId);
       },
     });
     const menu = await Menu.new({ items: [copyItem, archiveItem] });
@@ -657,13 +682,16 @@ export function Sidebar({
                     {sessions.map((session) => (
                       <div
                         key={session.id}
-                        className={`thread-row ${
+                        className={`thread-row thread-row-session ${
                           entry.id === activeWorkspaceId &&
                           session.id === activeSessionId
                             ? "active"
                             : ""
                         }`}
                         onClick={() => onSelectSession(entry.id, session.id)}
+                        onContextMenu={(event) =>
+                          showSessionMenu(event, entry.id, session.id)
+                        }
                         role="button"
                         tabIndex={0}
                         onKeyDown={(event) => {
@@ -687,6 +715,18 @@ export function Sidebar({
                           <span className="session-badge">OC</span>
                           {session.title}
                         </span>
+                        <div className="thread-menu">
+                          <button
+                            className="thread-menu-trigger"
+                            aria-label="Session menu"
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(event) =>
+                              showSessionMenu(event, entry.id, session.id)
+                            }
+                          >
+                            ...
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
