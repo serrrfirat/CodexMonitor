@@ -5,6 +5,8 @@ export type WorkspaceSettings = {
 
 export type WorkspaceKind = "main" | "worktree";
 
+export type BackendType = "codex" | "opencode";
+
 export type WorktreeInfo = {
   branch: string;
 };
@@ -15,6 +17,8 @@ export type WorkspaceInfo = {
   path: string;
   connected: boolean;
   codex_bin?: string | null;
+  opencode_bin?: string | null;
+  backend?: BackendType;
   kind?: WorkspaceKind;
   parentId?: string | null;
   worktree?: WorktreeInfo | null;
@@ -63,6 +67,7 @@ export type AccessMode = "read-only" | "current" | "full-access";
 
 export type AppSettings = {
   codexBin: string | null;
+  opencodeBin: string | null;
   defaultAccessMode: AccessMode;
 };
 
@@ -165,6 +170,7 @@ export type ModelOption = {
   supportedReasoningEfforts: { reasoningEffort: string; description: string }[];
   defaultReasoningEffort: string;
   isDefault: boolean;
+  providerId?: string;
 };
 
 export type SkillOption = {
@@ -184,4 +190,51 @@ export type DebugEntry = {
   source: "client" | "server" | "event" | "stderr" | "error";
   label: string;
   payload?: unknown;
+};
+
+export type OpenCodeSessionInfo = {
+  id: string;
+  title?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+};
+
+export type SessionSummary = {
+  id: string;
+  title: string;
+};
+
+export type OpenCodeMessage = {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  parts: MessagePart[];
+  createdAt?: number | null;
+};
+
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; tool_use_id: string; content: string }
+  | { type: "patch"; hash: string; files: string[] }
+  | { type: "file"; url: string; mime: string };
+
+export type ProviderModel = {
+  id: string;
+  name: string;
+};
+
+export type ProviderInfo = {
+  id: string;
+  name: string;
+  models: ProviderModel[];
+};
+
+export type OpenCodeDoctorResult = {
+  ok: boolean;
+  opencodeBin: string | null;
+  version: string | null;
+  acpOk: boolean;
+  details: string | null;
 };

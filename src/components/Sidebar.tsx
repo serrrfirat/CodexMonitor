@@ -1,4 +1,4 @@
-import type { RateLimitSnapshot, ThreadSummary, WorkspaceInfo } from "../types";
+import type { BackendType, RateLimitSnapshot, SessionSummary, ThreadSummary, WorkspaceInfo } from "../types";
 import { FolderKanban, Layers, Settings, TerminalSquare } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -9,13 +9,19 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 type SidebarProps = {
   workspaces: WorkspaceInfo[];
   threadsByWorkspace: Record<string, ThreadSummary[]>;
+  sessionsByWorkspace: Record<string, SessionSummary[]>;
   threadStatusById: Record<
     string,
     { isProcessing: boolean; hasUnread: boolean; isReviewing: boolean }
   >;
+  sessionStatusById: Record<
+    string,
+    { isProcessing: boolean; hasUnread: boolean }
+  >;
   threadListLoadingByWorkspace: Record<string, boolean>;
   activeWorkspaceId: string | null;
   activeThreadId: string | null;
+  activeSessionId: string | null;
   accountRateLimits: RateLimitSnapshot | null;
   onOpenSettings: () => void;
   onOpenDebug: () => void;
@@ -24,10 +30,11 @@ type SidebarProps = {
   onSelectHome: () => void;
   onSelectWorkspace: (id: string) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => void;
-  onAddAgent: (workspace: WorkspaceInfo) => void;
+  onAddAgent: (workspace: WorkspaceInfo, backend: BackendType) => void;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => void;
   onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
   onSelectThread: (workspaceId: string, threadId: string) => void;
+  onSelectSession: (workspaceId: string, sessionId: string) => void;
   onDeleteThread: (workspaceId: string, threadId: string) => void;
   onDeleteWorkspace: (workspaceId: string) => void;
   onDeleteWorktree: (workspaceId: string) => void;
@@ -36,10 +43,13 @@ type SidebarProps = {
 export function Sidebar({
   workspaces,
   threadsByWorkspace,
+  sessionsByWorkspace,
   threadStatusById,
+  sessionStatusById,
   threadListLoadingByWorkspace,
   activeWorkspaceId,
   activeThreadId,
+  activeSessionId,
   accountRateLimits,
   onOpenSettings,
   onOpenDebug,
@@ -52,6 +62,7 @@ export function Sidebar({
   onAddWorktreeAgent,
   onToggleWorkspaceCollapse,
   onSelectThread,
+  onSelectSession,
   onDeleteThread,
   onDeleteWorkspace,
   onDeleteWorktree,
@@ -247,12 +258,14 @@ export function Sidebar({
         <div className="workspace-list">
           {rootWorkspaces.map((entry) => {
             const threads = threadsByWorkspace[entry.id] ?? [];
+            const sessions = sessionsByWorkspace[entry.id] ?? [];
             const isCollapsed = entry.settings.sidebarCollapsed;
             const showThreads = !isCollapsed && threads.length > 0;
+            const showSessions = !isCollapsed && sessions.length > 0;
             const isLoadingThreads =
               threadListLoadingByWorkspace[entry.id] ?? false;
             const showThreadLoader =
-              !isCollapsed && isLoadingThreads && threads.length === 0;
+              !isCollapsed && isLoadingThreads && threads.length === 0 && sessions.length === 0;
             const worktrees = worktreesByParent.get(entry.id) ?? [];
 
             return (
@@ -353,10 +366,20 @@ export function Sidebar({
                         onClick={(event) => {
                           event.stopPropagation();
                           setAddMenuAnchor(null);
-                          onAddAgent(entry);
+                          onAddAgent(entry, "codex");
                         }}
                       >
-                        New agent
+                        New agent (Codex)
+                      </button>
+                      <button
+                        className="workspace-add-option"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setAddMenuAnchor(null);
+                          onAddAgent(entry, "opencode");
+                        }}
+                      >
+                        New agent (OpenCode)
                       </button>
                       <button
                         className="workspace-add-option"
@@ -627,6 +650,45 @@ export function Sidebar({
                           : `${threads.length - 3} more...`}
                       </button>
                     )}
+                  </div>
+                )}
+                {showSessions && (
+                  <div className="thread-list">
+                    {sessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className={`thread-row ${
+                          entry.id === activeWorkspaceId &&
+                          session.id === activeSessionId
+                            ? "active"
+                            : ""
+                        }`}
+                        onClick={() => onSelectSession(entry.id, session.id)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelectSession(entry.id, session.id);
+                          }
+                        }}
+                      >
+                        <span
+                          className={`thread-status ${
+                            sessionStatusById[session.id]?.isProcessing
+                              ? "processing"
+                              : sessionStatusById[session.id]?.hasUnread
+                                ? "unread"
+                                : "ready"
+                          }`}
+                          aria-hidden
+                        />
+                        <span className="thread-name">
+                          <span className="session-badge">OC</span>
+                          {session.title}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {showThreadLoader && (

@@ -1,0 +1,337 @@
+.opencode-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: min(20vh, 140px);
+}
+
+.opencode-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  animation: opencode-picker-fade-in 0.12s ease-out;
+}
+
+@keyframes opencode-picker-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.opencode-picker-card {
+  position: relative;
+  width: min(480px, calc(100vw - 40px));
+  max-height: min(520px, calc(100vh - 160px));
+  background: rgba(8, 10, 16, 0.98);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 24px 60px rgba(0, 0, 0, 0.5),
+    0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: opencode-picker-slide-in 0.15s ease-out;
+  overflow: hidden;
+}
+
+@keyframes opencode-picker-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.opencode-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.opencode-picker-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+}
+
+.opencode-picker-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.opencode-picker-close:hover {
+  background: var(--surface-card);
+  color: var(--text-strong);
+  transform: none;
+  box-shadow: none;
+}
+
+.opencode-picker-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.opencode-picker-search {
+  position: relative;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.opencode-picker-search-icon {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.opencode-picker-input {
+  width: 100%;
+  padding: 9px 12px 9px 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-card-muted);
+  color: var(--text-strong);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.opencode-picker-input::placeholder {
+  color: var(--text-dim);
+}
+
+.opencode-picker-input:focus {
+  border-color: rgba(77, 163, 255, 0.4);
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.12);
+}
+
+.opencode-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px;
+}
+
+.opencode-picker-empty {
+  padding: 20px 12px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.opencode-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-quiet);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.08s ease, border-color 0.08s ease;
+}
+
+.opencode-picker-item:hover {
+  background: var(--surface-card);
+  border-color: var(--border-muted);
+  transform: none;
+  box-shadow: none;
+}
+
+.opencode-picker-item.is-highlighted {
+  background: var(--surface-card);
+  border-color: var(--border-strong);
+}
+
+.opencode-picker-item.is-selected {
+  background: rgba(77, 163, 255, 0.08);
+  border-color: rgba(77, 163, 255, 0.2);
+  color: var(--text-strong);
+}
+
+.opencode-picker-item.is-selected.is-highlighted {
+  background: rgba(77, 163, 255, 0.14);
+  border-color: rgba(77, 163, 255, 0.35);
+}
+
+.opencode-picker-item--auto {
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-muted);
+  border-radius: 8px 8px 0 0;
+  padding-bottom: 10px;
+}
+
+.opencode-picker-item-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.opencode-picker-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.opencode-picker-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opencode-picker-check {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(77, 200, 140, 0.9);
+  flex-shrink: 0;
+}
+
+.opencode-picker-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.opencode-picker-group {
+  margin-top: 6px;
+}
+
+.opencode-picker-group:first-of-type {
+  margin-top: 2px;
+}
+
+.opencode-picker-group-label {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.opencode-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-card);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+  max-width: 180px;
+}
+
+.opencode-model-trigger:hover:not(:disabled) {
+  background: var(--surface-card-strong);
+  border-color: var(--border-subtle);
+  transform: none;
+  box-shadow: none;
+}
+
+.opencode-model-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.opencode-model-trigger-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.opencode-model-trigger-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.opencode-model-trigger-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opencode-model-trigger-caret {
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.opencode-model-trigger-caret svg {
+  width: 10px;
+  height: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  .opencode-picker-backdrop {
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .opencode-picker-card {
+    background: rgba(252, 253, 255, 0.98);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.04),
+      0 24px 60px rgba(0, 0, 0, 0.18),
+      0 8px 24px rgba(0, 0, 0, 0.1);
+  }
+
+  .opencode-picker-item.is-selected {
+    background: rgba(77, 153, 255, 0.12);
+    border-color: rgba(77, 153, 255, 0.25);
+  }
+
+  .opencode-picker-item.is-selected.is-highlighted {
+    background: rgba(77, 153, 255, 0.18);
+    border-color: rgba(77, 153, 255, 0.4);
+  }
+
+  .opencode-picker-check {
+    color: rgba(30, 140, 90, 0.9);
+  }
+}

@@ -27,6 +27,9 @@ type ComposerProps = {
   sendLabel?: string;
   prefillDraft?: QueuedMessage | null;
   onPrefillHandled?: (id: string) => void;
+  isOpenCodeMode?: boolean;
+  openCodeModelLabel?: string;
+  onOpenCodeModelClick?: () => void;
 };
 
 export function Composer({
@@ -51,6 +54,9 @@ export function Composer({
   sendLabel = "Send",
   prefillDraft = null,
   onPrefillHandled,
+  isOpenCodeMode = false,
+  openCodeModelLabel = "Auto (OpenCode default)",
+  onOpenCodeModelClick,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
@@ -140,6 +146,9 @@ export function Composer({
         accessMode={accessMode}
         onSelectAccessMode={onSelectAccessMode}
         contextUsage={contextUsage}
+        isOpenCodeMode={isOpenCodeMode}
+        openCodeModelLabel={openCodeModelLabel}
+        onOpenCodeModelClick={onOpenCodeModelClick}
       />
     </footer>
   );

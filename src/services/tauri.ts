@@ -3,10 +3,19 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   CodexDoctorResult,
+  OpenCodeDoctorResult,
+  OpenCodeMessage,
+  OpenCodeSessionInfo,
+  MessagePart,
+  ProviderInfo,
   WorkspaceInfo,
   WorkspaceSettings,
 } from "../types";
 import type { GitFileDiff, GitFileStatus, GitLogResponse, ReviewTarget } from "../types";
+
+// ============================================================================
+// File Picker
+// ============================================================================
 
 export async function pickWorkspacePath(): Promise<string | null> {
   const selection = await open({ directory: true, multiple: false });
@@ -24,7 +33,10 @@ export async function addWorkspace(
   path: string,
   codex_bin: string | null,
 ): Promise<WorkspaceInfo> {
-  return invoke<WorkspaceInfo>("add_workspace", { path, codex_bin });
+  return invoke<WorkspaceInfo>("add_workspace", { 
+    path, 
+    codexBin: codex_bin,
+  });
 }
 
 export async function addWorktree(
@@ -199,4 +211,68 @@ export async function resumeThread(workspaceId: string, threadId: string) {
 
 export async function archiveThread(workspaceId: string, threadId: string) {
   return invoke<any>("archive_thread", { workspaceId, threadId });
+}
+
+// ============================================================================
+// OpenCode ACP Operations
+// ============================================================================
+
+export async function listOpenCodeSessions(workspaceId: string): Promise<OpenCodeSessionInfo[]> {
+  return invoke<OpenCodeSessionInfo[]>("list_opencode_sessions", { workspaceId });
+}
+
+export async function createOpenCodeSession(workspaceId: string): Promise<OpenCodeSessionInfo> {
+  return invoke<OpenCodeSessionInfo>("create_opencode_session", { workspaceId });
+}
+
+export async function getOpenCodeSession(workspaceId: string, sessionId: string): Promise<OpenCodeSessionInfo> {
+  return invoke<OpenCodeSessionInfo>("get_opencode_session", { workspaceId, sessionId });
+}
+
+export async function deleteOpenCodeSession(workspaceId: string, sessionId: string): Promise<void> {
+  return invoke("delete_opencode_session", { workspaceId, sessionId });
+}
+
+export async function getOpenCodeMessages(
+  workspaceId: string,
+  sessionId: string
+): Promise<{ messages: OpenCodeMessage[]; parts: Record<string, MessagePart[]> }> {
+  return invoke("get_opencode_messages", { workspaceId, sessionId });
+}
+
+export async function sendOpenCodeMessage(
+  workspaceId: string,
+  sessionId: string,
+  text: string,
+  options?: {
+    providerId?: string;
+    modelId?: string;
+  }
+): Promise<void> {
+  return invoke("send_opencode_message", {
+    workspaceId,
+    sessionId,
+    text,
+    providerId: options?.providerId,
+    modelId: options?.modelId,
+  });
+}
+
+export async function cancelOpenCodeOperation(workspaceId: string, sessionId: string): Promise<void> {
+  return invoke("cancel_opencode_operation", { workspaceId, sessionId });
+}
+
+export async function getOpenCodeProviders(workspaceId: string): Promise<ProviderInfo[]> {
+  return invoke<ProviderInfo[]>("get_opencode_providers", { workspaceId });
+}
+
+export async function runOpenCodeDoctor(opencodeBin: string | null): Promise<OpenCodeDoctorResult> {
+  return invoke<OpenCodeDoctorResult>("opencode_doctor", { opencodeBin });
+}
+
+export async function updateWorkspaceOpenCodeBin(
+  id: string,
+  opencode_bin: string | null,
+): Promise<WorkspaceInfo> {
+  return invoke<WorkspaceInfo>("update_workspace_opencode_bin", { id, opencodeBin: opencode_bin });
 }

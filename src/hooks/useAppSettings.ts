@@ -4,6 +4,7 @@ import { getAppSettings, runCodexDoctor, updateAppSettings } from "../services/t
 
 const defaultSettings: AppSettings = {
   codexBin: null,
+  opencodeBin: null,
   defaultAccessMode: "current",
 };
 

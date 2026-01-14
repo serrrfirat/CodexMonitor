@@ -3,6 +3,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 mod codex;
 mod git;
+mod opencode;
 mod settings;
 mod state;
 mod storage;
@@ -153,7 +154,16 @@ pub fn run() {
             git::create_git_branch,
             codex::model_list,
             codex::account_rate_limits,
-            codex::skills_list
+            codex::skills_list,
+            opencode::opencode_doctor,
+            opencode::list_opencode_sessions,
+            opencode::create_opencode_session,
+            opencode::get_opencode_session,
+            opencode::delete_opencode_session,
+            opencode::get_opencode_messages,
+            opencode::send_opencode_message,
+            opencode::cancel_opencode_operation,
+            opencode::get_opencode_providers
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

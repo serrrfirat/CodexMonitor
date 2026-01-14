@@ -17,6 +17,7 @@ import "./styles/about.css";
 import "./styles/tabbar.css";
 import "./styles/worktree-modal.css";
 import "./styles/settings.css";
+import "./styles/opencode-model-picker.css";
 import "./styles/compact-base.css";
 import "./styles/compact-phone.css";
 import "./styles/compact-tablet.css";
@@ -36,15 +37,18 @@ import { AboutView } from "./components/AboutView";
 import { TabBar } from "./components/TabBar";
 import { TabletNav } from "./components/TabletNav";
 import { SettingsView } from "./components/SettingsView";
+import { OpenCodeModelPicker } from "./components/OpenCodeModelPicker";
 import { ArrowLeft } from "lucide-react";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useThreads } from "./hooks/useThreads";
+import { useSessions } from "./hooks/useSessions";
 import { useWindowDrag } from "./hooks/useWindowDrag";
 import { useGitStatus } from "./hooks/useGitStatus";
 import { useGitDiffs } from "./hooks/useGitDiffs";
 import { useGitLog } from "./hooks/useGitLog";
 import { useGitRemote } from "./hooks/useGitRemote";
 import { useModels } from "./hooks/useModels";
+import { useOpenCodeModels } from "./hooks/useOpenCodeModels";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
 import { useGitBranches } from "./hooks/useGitBranches";
@@ -55,7 +59,7 @@ import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLayoutMode } from "./hooks/useLayoutMode";
 import { useAppSettings } from "./hooks/useAppSettings";
 import { useUpdater } from "./hooks/useUpdater";
-import type { AccessMode, QueuedMessage, WorkspaceInfo } from "./types";
+import type { AccessMode, BackendType, QueuedMessage, WorkspaceInfo } from "./types";
 
 function useWindowLabel() {
   const [label, setLabel] = useState("main");
@@ -98,6 +102,7 @@ function MainApp() {
   >({});
   const [prefillDraft, setPrefillDraft] = useState<QueuedMessage | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openCodePickerOpen, setOpenCodePickerOpen] = useState(false);
   const [reduceTransparency, setReduceTransparency] = useState(() => {
     const stored = localStorage.getItem("reduceTransparency");
     return stored === "true";
@@ -179,6 +184,13 @@ function MainApp() {
     selectedEffort,
     setSelectedEffort,
   } = useModels({ activeWorkspace, onDebug: addDebugEntry });
+
+  const {
+    providers: openCodeProviders,
+    selection: openCodeModelSelection,
+    setSelection: setOpenCodeModelSelection,
+    label: openCodeModelLabel,
+  } = useOpenCodeModels(activeWorkspace);
   const { skills } = useSkills({ activeWorkspace, onDebug: addDebugEntry });
   const { files } = useWorkspaceFiles({ activeWorkspace, onDebug: addDebugEntry });
   const {
@@ -204,7 +216,7 @@ function MainApp() {
   const {
     setActiveThreadId,
     activeThreadId,
-    activeItems,
+    activeItems: codexActiveItems,
     approvals,
     threadsByWorkspace,
     threadStatusById,
@@ -230,29 +242,62 @@ function MainApp() {
     onMessageActivity: refreshGitStatus,
   });
 
+  const {
+    activeSessionId,
+    sessions,
+    items: openCodeActiveItems,
+    plan: openCodePlan,
+    isProcessing: openCodeIsProcessing,
+    hasUnread: openCodeHasUnread,
+    startSession,
+    switchSession,
+    sendMessage: sendOpenCodeMessage,
+    cancelCurrentOperation,
+  } = useSessions(activeWorkspace);
+
+  const isOpenCodeMode = Boolean(activeSessionId) && !activeThreadId;
+  const activeItems = isOpenCodeMode ? openCodeActiveItems : codexActiveItems;
+
+  const sessionsByWorkspace = activeWorkspaceId
+    ? { [activeWorkspaceId]: sessions }
+    : {};
+  const sessionStatusById = activeSessionId
+    ? { [activeSessionId]: { isProcessing: openCodeIsProcessing, hasUnread: openCodeHasUnread } }
+    : {};
+
   const activeRateLimits = activeWorkspaceId
     ? rateLimitsByWorkspace[activeWorkspaceId] ?? null
     : null;
   const activeTokenUsage = activeThreadId
     ? tokenUsageByThread[activeThreadId] ?? null
     : null;
-  const activePlan = activeThreadId ? planByThread[activeThreadId] ?? null : null;
+  const activePlan = isOpenCodeMode
+    ? openCodePlan
+    : activeThreadId
+      ? planByThread[activeThreadId] ?? null
+      : null;
   const hasActivePlan = Boolean(
     activePlan && (activePlan.steps.length > 0 || activePlan.explanation),
   );
   const showHome = !activeWorkspace;
-  const canInterrupt = activeThreadId
-    ? Boolean(
-        threadStatusById[activeThreadId]?.isProcessing &&
-          activeTurnIdByThread[activeThreadId],
-      )
-    : false;
-  const isProcessing = activeThreadId
-    ? threadStatusById[activeThreadId]?.isProcessing ?? false
-    : false;
-  const isReviewing = activeThreadId
-    ? threadStatusById[activeThreadId]?.isReviewing ?? false
-    : false;
+  const canInterrupt = isOpenCodeMode
+    ? openCodeIsProcessing
+    : activeThreadId
+      ? Boolean(
+          threadStatusById[activeThreadId]?.isProcessing &&
+            activeTurnIdByThread[activeThreadId],
+        )
+      : false;
+  const isProcessing = isOpenCodeMode
+    ? openCodeIsProcessing
+    : activeThreadId
+      ? threadStatusById[activeThreadId]?.isProcessing ?? false
+      : false;
+  const isReviewing = isOpenCodeMode
+    ? false
+    : activeThreadId
+      ? threadStatusById[activeThreadId]?.isReviewing ?? false
+      : false;
   const activeQueue = activeThreadId
     ? queuedByThread[activeThreadId] ?? []
     : [];
@@ -336,13 +381,17 @@ function MainApp() {
     setSelectedDiffPath(null);
   }
 
-  async function handleAddAgent(workspace: (typeof workspaces)[number]) {
+  async function handleAddAgent(workspace: (typeof workspaces)[number], backend: BackendType = "codex") {
     exitDiffView();
     selectWorkspace(workspace.id);
     if (!workspace.connected) {
       await connectWorkspace(workspace);
     }
-    await startThreadForWorkspace(workspace.id);
+    if (backend === "opencode") {
+      await startSession();
+    } else {
+      await startThreadForWorkspace(workspace.id);
+    }
     if (isCompact) {
       setActiveTab("codex");
     }
@@ -410,6 +459,23 @@ function MainApp() {
   async function handleSend(text: string) {
     const trimmed = text.trim();
     if (!trimmed) {
+      return;
+    }
+    if (isOpenCodeMode) {
+      const openCodeOptions = openCodeModelSelection
+        ? {
+            providerId: openCodeModelSelection.providerId,
+            modelId: openCodeModelSelection.modelId,
+          }
+        : {};
+      if (!activeSessionId) {
+        const newSessionId = await startSession();
+        if (newSessionId) {
+          await sendOpenCodeMessage(trimmed, { sessionId: newSessionId, ...openCodeOptions });
+        }
+      } else {
+        await sendOpenCodeMessage(trimmed, openCodeOptions);
+      }
       return;
     }
     if (activeThreadId && threadStatusById[activeThreadId]?.isReviewing) {
@@ -539,10 +605,13 @@ function MainApp() {
       <Sidebar
         workspaces={workspaces}
         threadsByWorkspace={threadsByWorkspace}
+        sessionsByWorkspace={sessionsByWorkspace}
         threadStatusById={threadStatusById}
+        sessionStatusById={sessionStatusById}
         threadListLoadingByWorkspace={threadListLoadingByWorkspace}
         activeWorkspaceId={activeWorkspaceId}
         activeThreadId={activeThreadId}
+        activeSessionId={activeSessionId}
         accountRateLimits={activeRateLimits}
         onOpenSettings={handleOpenSettings}
         onOpenDebug={handleDebugClick}
@@ -582,6 +651,12 @@ function MainApp() {
         selectWorkspace(workspaceId);
         setActiveThreadId(threadId, workspaceId);
       }}
+      onSelectSession={(workspaceId, sessionId) => {
+        exitDiffView();
+        selectWorkspace(workspaceId);
+        setActiveThreadId(null, workspaceId);
+        switchSession(sessionId);
+      }}
       onDeleteThread={(workspaceId, threadId) => {
         removeThread(workspaceId, threadId);
       }}
@@ -603,13 +678,19 @@ function MainApp() {
     />
   );
 
+  const handleStop = isOpenCodeMode ? cancelCurrentOperation : interruptTurn;
+
   const composerNode = showComposer ? (
     <Composer
       onSend={handleSend}
-      onStop={interruptTurn}
+      onStop={handleStop}
       canStop={canInterrupt}
       disabled={
-        activeThreadId ? threadStatusById[activeThreadId]?.isReviewing ?? false : false
+        isOpenCodeMode
+          ? false
+          : activeThreadId
+            ? threadStatusById[activeThreadId]?.isReviewing ?? false
+            : false
       }
       contextUsage={activeTokenUsage}
       queuedMessages={activeQueue}
@@ -653,6 +734,9 @@ function MainApp() {
       onSelectAccessMode={setAccessMode}
       skills={skills}
       files={files}
+      isOpenCodeMode={isOpenCodeMode}
+      openCodeModelLabel={openCodeModelLabel}
+      onOpenCodeModelClick={() => setOpenCodePickerOpen(true)}
     />
   ) : null;
 
@@ -1084,6 +1168,14 @@ function MainApp() {
           onUpdateWorkspaceCodexBin={async (id, codexBin) => {
             await updateWorkspaceCodexBin(id, codexBin);
           }}
+        />
+      )}
+      {openCodePickerOpen && (
+        <OpenCodeModelPicker
+          providers={openCodeProviders}
+          selection={openCodeModelSelection}
+          onSelect={setOpenCodeModelSelection}
+          onClose={() => setOpenCodePickerOpen(false)}
         />
       )}
     </div>

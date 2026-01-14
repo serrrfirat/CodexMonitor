@@ -6,10 +6,11 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::codex::spawn_workspace_session;
+use crate::opencode::spawn_opencode_session;
 use crate::state::AppState;
 use crate::storage::write_workspaces;
 use crate::types::{
-    WorkspaceEntry, WorkspaceInfo, WorkspaceKind, WorkspaceSettings, WorktreeInfo,
+    BackendType, WorkspaceEntry, WorkspaceInfo, WorkspaceKind, WorkspaceSettings, WorktreeInfo,
 };
 use crate::utils::normalize_git_path;
 
@@ -158,15 +159,22 @@ pub(crate) async fn list_workspaces(
     state: State<'_, AppState>,
 ) -> Result<Vec<WorkspaceInfo>, String> {
     let workspaces = state.workspaces.lock().await;
-    let sessions = state.sessions.lock().await;
+    let codex_sessions = state.sessions.lock().await;
+    let opencode_sessions = state.opencode_sessions.lock().await;
     let mut result = Vec::new();
     for entry in workspaces.values() {
+        let connected = match entry.backend {
+            BackendType::Codex => codex_sessions.contains_key(&entry.id),
+            BackendType::OpenCode => opencode_sessions.contains_key(&entry.id),
+        };
         result.push(WorkspaceInfo {
             id: entry.id.clone(),
             name: entry.name.clone(),
             path: entry.path.clone(),
             codex_bin: entry.codex_bin.clone(),
-            connected: sessions.contains_key(&entry.id),
+            opencode_bin: entry.opencode_bin.clone(),
+            backend: entry.backend.clone(),
+            connected,
             kind: entry.kind.clone(),
             parent_id: entry.parent_id.clone(),
             worktree: entry.worktree.clone(),
@@ -181,6 +189,8 @@ pub(crate) async fn list_workspaces(
 pub(crate) async fn add_workspace(
     path: String,
     codex_bin: Option<String>,
+    opencode_bin: Option<String>,
+    backend: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<WorkspaceInfo, String> {
@@ -189,39 +199,71 @@ pub(crate) async fn add_workspace(
         .and_then(|s| s.to_str())
         .unwrap_or("Workspace")
         .to_string();
+    
+    let backend_type = match backend.as_deref() {
+        Some("opencode") => BackendType::OpenCode,
+        _ => BackendType::Codex,
+    };
+
     let entry = WorkspaceEntry {
         id: Uuid::new_v4().to_string(),
         name: name.clone(),
         path: path.clone(),
         codex_bin,
+        opencode_bin,
+        backend: backend_type.clone(),
         kind: WorkspaceKind::Main,
         parent_id: None,
         worktree: None,
         settings: WorkspaceSettings::default(),
     };
 
-    let default_bin = {
-        let settings = state.app_settings.lock().await;
-        settings.codex_bin.clone()
-    };
-    let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
-    {
-        let mut workspaces = state.workspaces.lock().await;
-        workspaces.insert(entry.id.clone(), entry.clone());
-        let list: Vec<_> = workspaces.values().cloned().collect();
-        write_workspaces(&state.storage_path, &list)?;
+    match backend_type {
+        BackendType::Codex => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.codex_bin.clone()
+            };
+            let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
+            {
+                let mut workspaces = state.workspaces.lock().await;
+                workspaces.insert(entry.id.clone(), entry.clone());
+                let list: Vec<_> = workspaces.values().cloned().collect();
+                write_workspaces(&state.storage_path, &list)?;
+            }
+            state
+                .sessions
+                .lock()
+                .await
+                .insert(entry.id.clone(), session);
+        }
+        BackendType::OpenCode => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.opencode_bin.clone()
+            };
+            let session = spawn_opencode_session(entry.clone(), default_bin, app).await?;
+            {
+                let mut workspaces = state.workspaces.lock().await;
+                workspaces.insert(entry.id.clone(), entry.clone());
+                let list: Vec<_> = workspaces.values().cloned().collect();
+                write_workspaces(&state.storage_path, &list)?;
+            }
+            state
+                .opencode_sessions
+                .lock()
+                .await
+                .insert(entry.id.clone(), session);
+        }
     }
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(entry.id.clone(), session);
 
     Ok(WorkspaceInfo {
         id: entry.id,
         name: entry.name,
         path: entry.path,
         codex_bin: entry.codex_bin,
+        opencode_bin: entry.opencode_bin,
+        backend: entry.backend,
         connected: true,
         kind: entry.kind,
         parent_id: entry.parent_id,
@@ -283,6 +325,8 @@ pub(crate) async fn add_worktree(
         name: branch.to_string(),
         path: worktree_path_string,
         codex_bin: parent_entry.codex_bin.clone(),
+        opencode_bin: parent_entry.opencode_bin.clone(),
+        backend: parent_entry.backend.clone(),
         kind: WorkspaceKind::Worktree,
         parent_id: Some(parent_entry.id.clone()),
         worktree: Some(WorktreeInfo {
@@ -291,28 +335,52 @@ pub(crate) async fn add_worktree(
         settings: WorkspaceSettings::default(),
     };
 
-    let default_bin = {
-        let settings = state.app_settings.lock().await;
-        settings.codex_bin.clone()
-    };
-    let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
-    {
-        let mut workspaces = state.workspaces.lock().await;
-        workspaces.insert(entry.id.clone(), entry.clone());
-        let list: Vec<_> = workspaces.values().cloned().collect();
-        write_workspaces(&state.storage_path, &list)?;
+    match entry.backend {
+        BackendType::Codex => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.codex_bin.clone()
+            };
+            let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
+            {
+                let mut workspaces = state.workspaces.lock().await;
+                workspaces.insert(entry.id.clone(), entry.clone());
+                let list: Vec<_> = workspaces.values().cloned().collect();
+                write_workspaces(&state.storage_path, &list)?;
+            }
+            state
+                .sessions
+                .lock()
+                .await
+                .insert(entry.id.clone(), session);
+        }
+        BackendType::OpenCode => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.opencode_bin.clone()
+            };
+            let session = spawn_opencode_session(entry.clone(), default_bin, app).await?;
+            {
+                let mut workspaces = state.workspaces.lock().await;
+                workspaces.insert(entry.id.clone(), entry.clone());
+                let list: Vec<_> = workspaces.values().cloned().collect();
+                write_workspaces(&state.storage_path, &list)?;
+            }
+            state
+                .opencode_sessions
+                .lock()
+                .await
+                .insert(entry.id.clone(), session);
+        }
     }
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(entry.id.clone(), session);
 
     Ok(WorkspaceInfo {
         id: entry.id,
         name: entry.name,
         path: entry.path,
         codex_bin: entry.codex_bin,
+        opencode_bin: entry.opencode_bin,
+        backend: entry.backend,
         connected: true,
         kind: entry.kind,
         parent_id: entry.parent_id,
@@ -345,9 +413,19 @@ pub(crate) async fn remove_workspace(
 
     let parent_path = PathBuf::from(&entry.path);
     for child in &child_worktrees {
-        if let Some(session) = state.sessions.lock().await.remove(&child.id) {
-            let mut child_process = session.child.lock().await;
-            let _ = child_process.kill().await;
+        match child.backend {
+            BackendType::Codex => {
+                if let Some(session) = state.sessions.lock().await.remove(&child.id) {
+                    let mut child_process = session.child.lock().await;
+                    let _ = child_process.kill().await;
+                }
+            }
+            BackendType::OpenCode => {
+                if let Some(session) = state.opencode_sessions.lock().await.remove(&child.id) {
+                    let mut child_process = session.child.lock().await;
+                    let _ = child_process.kill().await;
+                }
+            }
         }
         let child_path = PathBuf::from(&child.path);
         if child_path.exists() {
@@ -360,9 +438,19 @@ pub(crate) async fn remove_workspace(
     }
     let _ = run_git_command(&parent_path, &["worktree", "prune", "--expire", "now"]).await;
 
-    if let Some(session) = state.sessions.lock().await.remove(&id) {
-        let mut child = session.child.lock().await;
-        let _ = child.kill().await;
+    match entry.backend {
+        BackendType::Codex => {
+            if let Some(session) = state.sessions.lock().await.remove(&id) {
+                let mut child = session.child.lock().await;
+                let _ = child.kill().await;
+            }
+        }
+        BackendType::OpenCode => {
+            if let Some(session) = state.opencode_sessions.lock().await.remove(&id) {
+                let mut child = session.child.lock().await;
+                let _ = child.kill().await;
+            }
+        }
     }
 
     {
@@ -403,9 +491,19 @@ pub(crate) async fn remove_worktree(
         (entry, parent)
     };
 
-    if let Some(session) = state.sessions.lock().await.remove(&entry.id) {
-        let mut child = session.child.lock().await;
-        let _ = child.kill().await;
+    match entry.backend {
+        BackendType::Codex => {
+            if let Some(session) = state.sessions.lock().await.remove(&entry.id) {
+                let mut child = session.child.lock().await;
+                let _ = child.kill().await;
+            }
+        }
+        BackendType::OpenCode => {
+            if let Some(session) = state.opencode_sessions.lock().await.remove(&entry.id) {
+                let mut child = session.child.lock().await;
+                let _ = child.kill().await;
+            }
+        }
     }
 
     let parent_path = PathBuf::from(&parent.path);
@@ -449,12 +547,17 @@ pub(crate) async fn update_workspace_settings(
     };
     write_workspaces(&state.storage_path, &list)?;
 
-    let connected = state.sessions.lock().await.contains_key(&id);
+    let connected = match entry_snapshot.backend {
+        BackendType::Codex => state.sessions.lock().await.contains_key(&id),
+        BackendType::OpenCode => state.opencode_sessions.lock().await.contains_key(&id),
+    };
     Ok(WorkspaceInfo {
         id: entry_snapshot.id,
         name: entry_snapshot.name,
         path: entry_snapshot.path,
         codex_bin: entry_snapshot.codex_bin,
+        opencode_bin: entry_snapshot.opencode_bin,
+        backend: entry_snapshot.backend,
         connected,
         kind: entry_snapshot.kind,
         parent_id: entry_snapshot.parent_id,
@@ -483,12 +586,17 @@ pub(crate) async fn update_workspace_codex_bin(
     };
     write_workspaces(&state.storage_path, &list)?;
 
-    let connected = state.sessions.lock().await.contains_key(&id);
+    let connected = match entry_snapshot.backend {
+        BackendType::Codex => state.sessions.lock().await.contains_key(&id),
+        BackendType::OpenCode => state.opencode_sessions.lock().await.contains_key(&id),
+    };
     Ok(WorkspaceInfo {
         id: entry_snapshot.id,
         name: entry_snapshot.name,
         path: entry_snapshot.path,
         codex_bin: entry_snapshot.codex_bin,
+        opencode_bin: entry_snapshot.opencode_bin,
+        backend: entry_snapshot.backend,
         connected,
         kind: entry_snapshot.kind,
         parent_id: entry_snapshot.parent_id,
@@ -511,12 +619,24 @@ pub(crate) async fn connect_workspace(
             .ok_or("workspace not found")?
     };
 
-    let default_bin = {
-        let settings = state.app_settings.lock().await;
-        settings.codex_bin.clone()
-    };
-    let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
-    state.sessions.lock().await.insert(entry.id, session);
+    match entry.backend {
+        BackendType::Codex => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.codex_bin.clone()
+            };
+            let session = spawn_workspace_session(entry.clone(), default_bin, app).await?;
+            state.sessions.lock().await.insert(entry.id, session);
+        }
+        BackendType::OpenCode => {
+            let default_bin = {
+                let settings = state.app_settings.lock().await;
+                settings.opencode_bin.clone()
+            };
+            let session = spawn_opencode_session(entry.clone(), default_bin, app).await?;
+            state.opencode_sessions.lock().await.insert(entry.id, session);
+        }
+    }
     Ok(())
 }
 
@@ -536,7 +656,7 @@ pub(crate) async fn list_workspace_files(
 #[cfg(test)]
 mod tests {
     use super::{sanitize_worktree_name, sort_workspaces};
-    use crate::types::{WorkspaceInfo, WorkspaceKind, WorkspaceSettings};
+    use crate::types::{BackendType, WorkspaceInfo, WorkspaceKind, WorkspaceSettings};
 
     fn workspace(name: &str, sort_order: Option<u32>) -> WorkspaceInfo {
         WorkspaceInfo {
@@ -545,6 +665,8 @@ mod tests {
             path: "/tmp".to_string(),
             connected: false,
             codex_bin: None,
+            opencode_bin: None,
+            backend: BackendType::Codex,
             kind: WorkspaceKind::Main,
             parent_id: None,
             worktree: None,

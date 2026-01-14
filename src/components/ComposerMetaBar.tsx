@@ -12,6 +12,9 @@ type ComposerMetaBarProps = {
   accessMode: AccessMode;
   onSelectAccessMode: (mode: AccessMode) => void;
   contextUsage?: ThreadTokenUsage | null;
+  isOpenCodeMode?: boolean;
+  openCodeModelLabel?: string;
+  onOpenCodeModelClick?: () => void;
 };
 
 export function ComposerMetaBar({
@@ -25,6 +28,9 @@ export function ComposerMetaBar({
   accessMode,
   onSelectAccessMode,
   contextUsage = null,
+  isOpenCodeMode = false,
+  openCodeModelLabel = "Auto (OpenCode default)",
+  onOpenCodeModelClick,
 }: ComposerMetaBarProps) {
   const contextWindow = contextUsage?.modelContextWindow ?? null;
   const lastTokens = contextUsage?.last.totalTokens ?? 0;
@@ -42,49 +48,99 @@ export function ComposerMetaBar({
   return (
     <div className="composer-bar">
       <div className="composer-meta">
-        <div className="composer-select-wrap">
-          <span className="composer-icon" aria-hidden>
-            <svg viewBox="0 0 24 24" fill="none">
-              <path
-                d="M7 8V6a5 5 0 0 1 10 0v2"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-              <rect
-                x="4.5"
-                y="8"
-                width="15"
-                height="11"
-                rx="3"
-                stroke="currentColor"
-                strokeWidth="1.4"
-              />
-              <circle cx="9" cy="13" r="1" fill="currentColor" />
-              <circle cx="15" cy="13" r="1" fill="currentColor" />
-              <path
-                d="M9 16h6"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-            </svg>
-          </span>
-          <select
-            className="composer-select composer-select--model"
-            aria-label="Model"
-            value={selectedModelId ?? ""}
-            onChange={(event) => onSelectModel(event.target.value)}
+        {isOpenCodeMode ? (
+          <button
+            className="opencode-model-trigger"
+            onClick={onOpenCodeModelClick}
             disabled={disabled}
+            type="button"
+            aria-label="Select OpenCode model"
           >
-            {models.length === 0 && <option value="">No models</option>}
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.displayName || model.model}
-              </option>
-            ))}
-          </select>
-        </div>
+            <span className="opencode-model-trigger-icon" aria-hidden>
+              <svg viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M7 8V6a5 5 0 0 1 10 0v2"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+                <rect
+                  x="4.5"
+                  y="8"
+                  width="15"
+                  height="11"
+                  rx="3"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                />
+                <circle cx="9" cy="13" r="1" fill="currentColor" />
+                <circle cx="15" cy="13" r="1" fill="currentColor" />
+                <path
+                  d="M9 16h6"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <span className="opencode-model-trigger-label">{openCodeModelLabel}</span>
+            <span className="opencode-model-trigger-caret" aria-hidden>
+              <svg viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 9l6 6 6-6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          <div className="composer-select-wrap">
+            <span className="composer-icon" aria-hidden>
+              <svg viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M7 8V6a5 5 0 0 1 10 0v2"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+                <rect
+                  x="4.5"
+                  y="8"
+                  width="15"
+                  height="11"
+                  rx="3"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                />
+                <circle cx="9" cy="13" r="1" fill="currentColor" />
+                <circle cx="15" cy="13" r="1" fill="currentColor" />
+                <path
+                  d="M9 16h6"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <select
+              className="composer-select composer-select--model"
+              aria-label="Model"
+              value={selectedModelId ?? ""}
+              onChange={(event) => onSelectModel(event.target.value)}
+              disabled={disabled}
+            >
+              {models.length === 0 && <option value="">No models</option>}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName || model.model}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="composer-select-wrap">
           <span className="composer-icon" aria-hidden>
             <svg viewBox="0 0 24 24" fill="none">

@@ -11,6 +11,7 @@ use crate::types::{AppSettings, WorkspaceEntry};
 pub(crate) struct AppState {
     pub(crate) workspaces: Mutex<HashMap<String, WorkspaceEntry>>,
     pub(crate) sessions: Mutex<HashMap<String, Arc<crate::codex::WorkspaceSession>>>,
+    pub(crate) opencode_sessions: Mutex<HashMap<String, Arc<crate::opencode::OpenCodeSession>>>,
     pub(crate) storage_path: PathBuf,
     pub(crate) settings_path: PathBuf,
     pub(crate) app_settings: Mutex<AppSettings>,
@@ -29,6 +30,7 @@ impl AppState {
         Self {
             workspaces: Mutex::new(workspaces),
             sessions: Mutex::new(HashMap::new()),
+            opencode_sessions: Mutex::new(HashMap::new()),
             storage_path,
             settings_path,
             app_settings: Mutex::new(app_settings),

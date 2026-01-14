@@ -66,7 +66,10 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
       payload: { path: selection },
     });
     try {
-      const workspace = await addWorkspaceService(selection, defaultCodexBin ?? null);
+      const workspace = await addWorkspaceService(
+        selection,
+        defaultCodexBin ?? null,
+      );
       setWorkspaces((prev) => [...prev, workspace]);
       setActiveWorkspaceId(workspace.id);
       return workspace;
