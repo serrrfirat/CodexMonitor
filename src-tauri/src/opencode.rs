@@ -521,6 +521,23 @@ pub(crate) async fn get_opencode_session(
 }
 
 #[tauri::command]
+pub(crate) async fn load_opencode_session(
+    workspace_id: String,
+    session_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<OpenCodeSessionInfo, String> {
+    let session = get_or_spawn_acp_session(&workspace_id, state.inner(), &app).await?;
+
+    let result = send_jsonrpc_request(&session, "session/load", json!({
+        "sessionId": session_id
+    })).await?;
+
+    serde_json::from_value::<OpenCodeSessionInfo>(result)
+        .map_err(|e| format!("Failed to parse loaded session: {}", e))
+}
+
+#[tauri::command]
 pub(crate) async fn delete_opencode_session(
     workspace_id: String,
     session_id: String,

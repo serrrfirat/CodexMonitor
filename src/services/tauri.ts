@@ -229,6 +229,10 @@ export async function getOpenCodeSession(workspaceId: string, sessionId: string)
   return invoke<OpenCodeSessionInfo>("get_opencode_session", { workspaceId, sessionId });
 }
 
+export async function loadOpenCodeSession(workspaceId: string, sessionId: string): Promise<OpenCodeSessionInfo> {
+  return invoke<OpenCodeSessionInfo>("load_opencode_session", { workspaceId, sessionId });
+}
+
 export async function deleteOpenCodeSession(workspaceId: string, sessionId: string): Promise<void> {
   return invoke("delete_opencode_session", { workspaceId, sessionId });
 }

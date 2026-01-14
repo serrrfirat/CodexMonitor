@@ -159,6 +159,7 @@ pub fn run() {
             opencode::list_opencode_sessions,
             opencode::create_opencode_session,
             opencode::get_opencode_session,
+            opencode::load_opencode_session,
             opencode::delete_opencode_session,
             opencode::get_opencode_messages,
             opencode::send_opencode_message,

@@ -1,32 +1,27 @@
-import type { TurnPlan } from "../types";
-
-type HandoffKind = "thread" | "session";
-
-type HandoffTldr = {
-  kind: HandoffKind;
-  title: string;
-  isFirstView: boolean;
-  nextStep: string | null;
-};
+import type { HandoffTldr } from "../hooks/useHandoffTldr";
 
 type HandoffTldrCardProps = {
   tldr: HandoffTldr;
-  isProcessing: boolean;
-  kind: HandoffKind;
-  plan: TurnPlan | null;
+};
+
+const STATUS_LABELS: Record<HandoffTldr["status"], string> = {
+  new: "NEW",
+  working: "WORKING",
+  "waiting-approval": "NEEDS APPROVAL",
+  idle: "",
 };
 
 export function HandoffTldrCard({ tldr }: HandoffTldrCardProps) {
+  const statusLabel = STATUS_LABELS[tldr.status];
+  const hasContent = statusLabel || tldr.summary;
+
+  if (!hasContent) return null;
+
   return (
-    <div className="handoff-tldr" role="status" aria-label="Agent status">
+    <div className="handoff-tldr" role="status" aria-label="Session status">
       <div className="handoff-tldr-inner">
-        <span className="handoff-pill">{tldr.title}</span>
-        {tldr.isFirstView && <span className="handoff-flag">FIRST VIEW</span>}
-        {tldr.nextStep && (
-          <span className="handoff-next">
-            <span className="handoff-next-label">Next:</span> {tldr.nextStep}
-          </span>
-        )}
+        {statusLabel && <span className={`handoff-flag handoff-flag--${tldr.status}`}>{statusLabel}</span>}
+        {tldr.summary && <span className="handoff-summary">{tldr.summary}</span>}
       </div>
     </div>
   );

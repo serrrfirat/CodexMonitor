@@ -564,9 +564,10 @@ export function useSessions(
 
     const setupEventListener = async () => {
       const unlisten = await listen<OpenCodeEvent>("opencode-event", (event) => {
-        const { workspaceId: eventWorkspaceId, method, params } = event.payload;
+        try {
+          const { workspaceId: eventWorkspaceId, method, params } = event.payload;
 
-        if (eventWorkspaceId !== workspaceId) return;
+          if (eventWorkspaceId !== workspaceId) return;
 
         switch (method) {
           case "session/created": {
@@ -831,6 +832,9 @@ export function useSessions(
             dispatch({ type: "markProcessing", sessionId, isProcessing: false });
             break;
           }
+        }
+        } catch (err) {
+          console.error("[useSessions] Error handling opencode-event:", err);
         }
       });
 

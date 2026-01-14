@@ -4,10 +4,11 @@
   min-height: 0;
   min-width: 0;
   flex: 1;
+  background: var(--surface-messages);
 }
 
 .handoff-tldr {
-  padding: 10px 24px 0;
+  padding: 12px 24px 0;
   -webkit-app-region: no-drag;
 }
 
@@ -15,40 +16,59 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-strong);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-}
-
-.handoff-pill {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 4px 8px;
+  padding: 7px 14px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-strong);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.09) 0%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  backdrop-filter: blur(40px) saturate(1.6);
+  -webkit-backdrop-filter: blur(40px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-stronger);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
 }
 
 .handoff-flag {
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: rgba(255, 255, 255, 0.5);
 }
 
-.handoff-next {
-  font-size: 12px;
-  color: var(--text-quiet);
+.handoff-flag--new {
+  color: rgba(100, 180, 255, 0.8);
+}
+
+.handoff-flag--working {
+  color: rgba(255, 200, 100, 0.8);
+}
+
+.handoff-flag--waiting-approval {
+  color: rgba(255, 150, 100, 0.9);
+}
+
+.handoff-summary {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: min(520px, 58vw);
+  max-width: min(480px, 54vw);
 }
 
-.handoff-next-label {
-  color: var(--text-faint);
+.app.reduced-transparency .handoff-tldr-inner {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface-card-muted);
+  border-color: var(--border-subtle);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
+
+

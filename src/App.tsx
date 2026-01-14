@@ -298,13 +298,27 @@ function MainApp() {
 
   const activeHandoffKind = isOpenCodeMode ? "session" : "thread";
   const activeHandoffId = isOpenCodeMode ? activeSessionId : activeThreadId;
+  const activeHandoffTitle = isOpenCodeMode
+    ? (activeWorkspaceId && activeSessionId
+        ? sessionsByWorkspace[activeWorkspaceId]?.find(
+            (session) => session.id === activeSessionId,
+          )?.title ?? null
+        : null)
+    : activeWorkspaceId && activeThreadId
+      ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId)
+          ?.name ?? null
+      : null;
+
+  const hasPendingApproval = approvals.length > 0;
   const { tldr: handoffTldr } = useHandoffTldr({
     workspaceId: activeWorkspaceId,
     kind: activeHandoffKind,
     id: activeHandoffId,
+    title: activeHandoffTitle,
+    items: activeItems,
     plan: activePlan,
     isProcessing,
-    hasMessages: activeItems.length > 0,
+    hasPendingApproval,
   });
 
   const activeQueue = activeThreadId
@@ -696,12 +710,7 @@ function MainApp() {
 
   const conversationNode = handoffTldr ? (
     <div className="conversation-stack">
-      <HandoffTldrCard
-        tldr={handoffTldr}
-        isProcessing={isProcessing}
-        kind={activeHandoffKind}
-        plan={activePlan}
-      />
+      <HandoffTldrCard tldr={handoffTldr} />
       {messagesNode}
     </div>
   ) : (
