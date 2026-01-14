@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::env;
 use std::io::ErrorKind;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,46 +66,64 @@ impl WorkspaceSession {
     }
 }
 
+fn build_codex_path_env(codex_bin: Option<&str>) -> Option<String> {
+    let mut paths: Vec<String> = env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect();
+    let mut extras = vec![
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+    .into_iter()
+    .map(|value| value.to_string())
+    .collect::<Vec<String>>();
+    if let Ok(home) = env::var("HOME") {
+        extras.push(format!("{home}/.local/bin"));
+        extras.push(format!("{home}/.cargo/bin"));
+        extras.push(format!("{home}/.bun/bin"));
+        let nvm_root = Path::new(&home).join(".nvm/versions/node");
+        if let Ok(entries) = std::fs::read_dir(nvm_root) {
+            for entry in entries.flatten() {
+                let bin_path = entry.path().join("bin");
+                if bin_path.is_dir() {
+                    extras.push(bin_path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    if let Some(bin_path) = codex_bin.filter(|value| !value.trim().is_empty()) {
+        let parent = Path::new(bin_path).parent();
+        if let Some(parent) = parent {
+            extras.push(parent.to_string_lossy().to_string());
+        }
+    }
+    for extra in extras {
+        if !paths.contains(&extra) {
+            paths.push(extra);
+        }
+    }
+    if paths.is_empty() {
+        None
+    } else {
+        Some(paths.join(":"))
+    }
+}
+
 fn build_codex_command_with_bin(codex_bin: Option<String>) -> Command {
-    let default_bin = codex_bin
-        .as_ref()
-        .map(|value| value.trim().is_empty())
-        .unwrap_or(true);
     let bin = codex_bin
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "codex".into());
     let mut command = Command::new(bin);
-    if default_bin {
-        let mut paths: Vec<String> = env::var("PATH")
-            .unwrap_or_default()
-            .split(':')
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_string())
-            .collect();
-        let mut extras = vec![
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ]
-        .into_iter()
-        .map(|value| value.to_string())
-        .collect::<Vec<String>>();
-        if let Ok(home) = env::var("HOME") {
-            extras.push(format!("{home}/.local/bin"));
-            extras.push(format!("{home}/.cargo/bin"));
-        }
-        for extra in extras {
-            if !paths.contains(&extra) {
-                paths.push(extra);
-            }
-        }
-        if !paths.is_empty() {
-            command.env("PATH", paths.join(":"));
-        }
+    if let Some(path_env) = build_codex_path_env(codex_bin.as_deref()) {
+        command.env("PATH", path_env);
     }
     command
 }
@@ -308,6 +327,7 @@ pub(crate) async fn codex_doctor(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .or(default_bin);
+    let path_env = build_codex_path_env(resolved.as_deref());
     let version = check_codex_installation(resolved.clone()).await?;
     let mut command = build_codex_command_with_bin(resolved.clone());
     command.arg("app-server");
@@ -317,6 +337,59 @@ pub(crate) async fn codex_doctor(
     let app_server_ok = match timeout(Duration::from_secs(5), command.output()).await {
         Ok(result) => result.map(|output| output.status.success()).unwrap_or(false),
         Err(_) => false,
+    };
+    let (node_ok, node_version, node_details) = {
+        let mut node_command = Command::new("node");
+        if let Some(ref path_env) = path_env {
+            node_command.env("PATH", path_env);
+        }
+        node_command.arg("--version");
+        node_command.stdout(std::process::Stdio::piped());
+        node_command.stderr(std::process::Stdio::piped());
+        match timeout(Duration::from_secs(5), node_command.output()).await {
+            Ok(result) => match result {
+                Ok(output) => {
+                    if output.status.success() {
+                        let version =
+                            String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        (
+                            !version.is_empty(),
+                            if version.is_empty() { None } else { Some(version) },
+                            None,
+                        )
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let detail = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
+                        (
+                            false,
+                            None,
+                            Some(if detail.is_empty() {
+                                "Node failed to start.".to_string()
+                            } else {
+                                detail.to_string()
+                            }),
+                        )
+                    }
+                }
+                Err(err) => {
+                    if err.kind() == ErrorKind::NotFound {
+                        (false, None, Some("Node not found on PATH.".to_string()))
+                    } else {
+                        (false, None, Some(err.to_string()))
+                    }
+                }
+            },
+            Err(_) => (
+                false,
+                None,
+                Some("Timed out while checking Node.".to_string()),
+            ),
+        }
     };
     let details = if app_server_ok {
         None
@@ -329,6 +402,10 @@ pub(crate) async fn codex_doctor(
         "version": version,
         "appServerOk": app_server_ok,
         "details": details,
+        "path": path_env,
+        "nodeOk": node_ok,
+        "nodeVersion": node_version,
+        "nodeDetails": node_details,
     }))
 }
 

@@ -27,6 +27,8 @@ type ComposerProps = {
   sendLabel?: string;
   prefillDraft?: QueuedMessage | null;
   onPrefillHandled?: (id: string) => void;
+  insertText?: QueuedMessage | null;
+  onInsertHandled?: (id: string) => void;
   isOpenCodeMode?: boolean;
   openCodeModelLabel?: string;
   onOpenCodeModelClick?: () => void;
@@ -54,6 +56,8 @@ export function Composer({
   sendLabel = "Send",
   prefillDraft = null,
   onPrefillHandled,
+  insertText = null,
+  onInsertHandled,
   isOpenCodeMode = false,
   openCodeModelLabel = "Auto (OpenCode default)",
   onOpenCodeModelClick,
@@ -101,6 +105,14 @@ export function Composer({
     setText(prefillDraft.text);
     onPrefillHandled?.(prefillDraft.id);
   }, [prefillDraft, onPrefillHandled]);
+
+  useEffect(() => {
+    if (!insertText) {
+      return;
+    }
+    setText(insertText.text);
+    onInsertHandled?.(insertText.id);
+  }, [insertText, onInsertHandled]);
 
   return (
     <footer className={`composer${disabled ? " is-disabled" : ""}`}>

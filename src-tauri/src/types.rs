@@ -26,6 +26,31 @@ pub(crate) struct GitLogEntry {
 pub(crate) struct GitLogResponse {
     pub(crate) total: usize,
     pub(crate) entries: Vec<GitLogEntry>,
+    #[serde(default)]
+    pub(crate) ahead: usize,
+    #[serde(default)]
+    pub(crate) behind: usize,
+    #[serde(default, rename = "aheadEntries")]
+    pub(crate) ahead_entries: Vec<GitLogEntry>,
+    #[serde(default, rename = "behindEntries")]
+    pub(crate) behind_entries: Vec<GitLogEntry>,
+    #[serde(default)]
+    pub(crate) upstream: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct GitHubIssue {
+    pub(crate) number: u64,
+    pub(crate) title: String,
+    pub(crate) url: String,
+    #[serde(rename = "updatedAt")]
+    pub(crate) updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct GitHubIssuesResponse {
+    pub(crate) total: usize,
+    pub(crate) issues: Vec<GitHubIssue>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

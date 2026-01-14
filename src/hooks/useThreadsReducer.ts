@@ -1,0 +1,501 @@
+import type {
+  ApprovalRequest,
+  ConversationItem,
+  RateLimitSnapshot,
+  ThreadSummary,
+  ThreadTokenUsage,
+  TurnPlan,
+} from "../types";
+import { normalizeItem, prepareThreadItems, upsertItem } from "../utils/threadItems";
+
+type ThreadActivityStatus = {
+  isProcessing: boolean;
+  hasUnread: boolean;
+  isReviewing: boolean;
+};
+
+export type ThreadState = {
+  activeThreadIdByWorkspace: Record<string, string | null>;
+  itemsByThread: Record<string, ConversationItem[]>;
+  threadsByWorkspace: Record<string, ThreadSummary[]>;
+  threadStatusById: Record<string, ThreadActivityStatus>;
+  threadListLoadingByWorkspace: Record<string, boolean>;
+  activeTurnIdByThread: Record<string, string | null>;
+  approvals: ApprovalRequest[];
+  tokenUsageByThread: Record<string, ThreadTokenUsage>;
+  rateLimitsByWorkspace: Record<string, RateLimitSnapshot | null>;
+  planByThread: Record<string, TurnPlan | null>;
+  lastAgentMessageByThread: Record<string, { text: string; timestamp: number }>;
+};
+
+export type ThreadAction =
+  | { type: "setActiveThreadId"; workspaceId: string; threadId: string | null }
+  | { type: "ensureThread"; workspaceId: string; threadId: string }
+  | { type: "removeThread"; workspaceId: string; threadId: string }
+  | { type: "markProcessing"; threadId: string; isProcessing: boolean }
+  | { type: "markReviewing"; threadId: string; isReviewing: boolean }
+  | { type: "markUnread"; threadId: string; hasUnread: boolean }
+  | {
+      type: "addUserMessage";
+      workspaceId: string;
+      threadId: string;
+      text: string;
+    }
+  | { type: "addAssistantMessage"; threadId: string; text: string }
+  | { type: "setThreadName"; workspaceId: string; threadId: string; name: string }
+  | { type: "appendAgentDelta"; threadId: string; itemId: string; delta: string }
+  | { type: "completeAgentMessage"; threadId: string; itemId: string; text: string }
+  | { type: "upsertItem"; threadId: string; item: ConversationItem }
+  | { type: "setThreadItems"; threadId: string; items: ConversationItem[] }
+  | {
+      type: "appendReasoningSummary";
+      threadId: string;
+      itemId: string;
+      delta: string;
+    }
+  | { type: "appendReasoningContent"; threadId: string; itemId: string; delta: string }
+  | { type: "appendToolOutput"; threadId: string; itemId: string; delta: string }
+  | { type: "setThreads"; workspaceId: string; threads: ThreadSummary[] }
+  | {
+      type: "setThreadListLoading";
+      workspaceId: string;
+      isLoading: boolean;
+    }
+  | { type: "addApproval"; approval: ApprovalRequest }
+  | { type: "removeApproval"; requestId: number }
+  | { type: "setThreadTokenUsage"; threadId: string; tokenUsage: ThreadTokenUsage }
+  | {
+      type: "setRateLimits";
+      workspaceId: string;
+      rateLimits: RateLimitSnapshot | null;
+    }
+  | { type: "setActiveTurnId"; threadId: string; turnId: string | null }
+  | { type: "setThreadPlan"; threadId: string; plan: TurnPlan | null }
+  | { type: "clearThreadPlan"; threadId: string }
+  | {
+      type: "setLastAgentMessage";
+      threadId: string;
+      text: string;
+      timestamp: number;
+    };
+
+const emptyItems: Record<string, ConversationItem[]> = {};
+
+export const initialState: ThreadState = {
+  activeThreadIdByWorkspace: {},
+  itemsByThread: emptyItems,
+  threadsByWorkspace: {},
+  threadStatusById: {},
+  threadListLoadingByWorkspace: {},
+  activeTurnIdByThread: {},
+  approvals: [],
+  tokenUsageByThread: {},
+  rateLimitsByWorkspace: {},
+  planByThread: {},
+  lastAgentMessageByThread: {},
+};
+
+export function threadReducer(state: ThreadState, action: ThreadAction): ThreadState {
+  switch (action.type) {
+    case "setActiveThreadId":
+      return {
+        ...state,
+        activeThreadIdByWorkspace: {
+          ...state.activeThreadIdByWorkspace,
+          [action.workspaceId]: action.threadId,
+        },
+        threadStatusById: action.threadId
+          ? {
+              ...state.threadStatusById,
+              [action.threadId]: {
+                isProcessing:
+                  state.threadStatusById[action.threadId]?.isProcessing ?? false,
+                hasUnread: false,
+                isReviewing:
+                  state.threadStatusById[action.threadId]?.isReviewing ?? false,
+              },
+            }
+          : state.threadStatusById,
+      };
+    case "ensureThread": {
+      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
+      if (list.some((thread) => thread.id === action.threadId)) {
+        return state;
+      }
+      const thread: ThreadSummary = {
+        id: action.threadId,
+        name: `Agent ${list.length + 1}`,
+      };
+      return {
+        ...state,
+        threadsByWorkspace: {
+          ...state.threadsByWorkspace,
+          [action.workspaceId]: [thread, ...list],
+        },
+        threadStatusById: {
+          ...state.threadStatusById,
+          [action.threadId]: {
+            isProcessing: false,
+            hasUnread: false,
+            isReviewing: false,
+          },
+        },
+        activeThreadIdByWorkspace: {
+          ...state.activeThreadIdByWorkspace,
+          [action.workspaceId]:
+            state.activeThreadIdByWorkspace[action.workspaceId] ?? action.threadId,
+        },
+      };
+    }
+    case "removeThread": {
+      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const filtered = list.filter((thread) => thread.id !== action.threadId);
+      const nextActive =
+        state.activeThreadIdByWorkspace[action.workspaceId] === action.threadId
+          ? filtered[0]?.id ?? null
+          : state.activeThreadIdByWorkspace[action.workspaceId] ?? null;
+      const { [action.threadId]: _, ...restItems } = state.itemsByThread;
+      const { [action.threadId]: __, ...restStatus } = state.threadStatusById;
+      const { [action.threadId]: ___, ...restTurns } = state.activeTurnIdByThread;
+      const { [action.threadId]: ____, ...restPlans } = state.planByThread;
+      return {
+        ...state,
+        threadsByWorkspace: {
+          ...state.threadsByWorkspace,
+          [action.workspaceId]: filtered,
+        },
+        itemsByThread: restItems,
+        threadStatusById: restStatus,
+        activeTurnIdByThread: restTurns,
+        planByThread: restPlans,
+        activeThreadIdByWorkspace: {
+          ...state.activeThreadIdByWorkspace,
+          [action.workspaceId]: nextActive,
+        },
+      };
+    }
+    case "markProcessing":
+      return {
+        ...state,
+        threadStatusById: {
+          ...state.threadStatusById,
+          [action.threadId]: {
+            isProcessing: action.isProcessing,
+            hasUnread: state.threadStatusById[action.threadId]?.hasUnread ?? false,
+            isReviewing:
+              state.threadStatusById[action.threadId]?.isReviewing ?? false,
+          },
+        },
+      };
+    case "setActiveTurnId":
+      return {
+        ...state,
+        activeTurnIdByThread: {
+          ...state.activeTurnIdByThread,
+          [action.threadId]: action.turnId,
+        },
+      };
+    case "markReviewing":
+      return {
+        ...state,
+        threadStatusById: {
+          ...state.threadStatusById,
+          [action.threadId]: {
+            isProcessing:
+              state.threadStatusById[action.threadId]?.isProcessing ?? false,
+            hasUnread: state.threadStatusById[action.threadId]?.hasUnread ?? false,
+            isReviewing: action.isReviewing,
+          },
+        },
+      };
+    case "markUnread":
+      return {
+        ...state,
+        threadStatusById: {
+          ...state.threadStatusById,
+          [action.threadId]: {
+            isProcessing:
+              state.threadStatusById[action.threadId]?.isProcessing ?? false,
+            hasUnread: action.hasUnread,
+            isReviewing:
+              state.threadStatusById[action.threadId]?.isReviewing ?? false,
+          },
+        },
+      };
+    case "addUserMessage": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const message: ConversationItem = {
+        id: `${Date.now()}-user`,
+        kind: "message",
+        role: "user",
+        text: action.text,
+      };
+      const threads = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const bumpedThreads = threads.length
+        ? [
+            ...threads.filter((thread) => thread.id === action.threadId),
+            ...threads.filter((thread) => thread.id !== action.threadId),
+          ]
+        : threads;
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems([...list, message]),
+        },
+        threadsByWorkspace: {
+          ...state.threadsByWorkspace,
+          [action.workspaceId]: bumpedThreads,
+        },
+      };
+    }
+    case "addAssistantMessage": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const message: ConversationItem = {
+        id: `${Date.now()}-assistant`,
+        kind: "message",
+        role: "assistant",
+        text: action.text,
+      };
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems([...list, message]),
+        },
+      };
+    }
+    case "setThreadName": {
+      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const next = list.map((thread) =>
+        thread.id === action.threadId ? { ...thread, name: action.name } : thread,
+      );
+      return {
+        ...state,
+        threadsByWorkspace: {
+          ...state.threadsByWorkspace,
+          [action.workspaceId]: next,
+        },
+      };
+    }
+    case "appendAgentDelta": {
+      const list = [...(state.itemsByThread[action.threadId] ?? [])];
+      const index = list.findIndex((msg) => msg.id === action.itemId);
+      if (index >= 0 && list[index].kind === "message") {
+        const existing = list[index];
+        list[index] = {
+          ...existing,
+          text: `${existing.text}${action.delta}`,
+        };
+      } else {
+        list.push({
+          id: action.itemId,
+          kind: "message",
+          role: "assistant",
+          text: action.delta,
+        });
+      }
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(list),
+        },
+      };
+    }
+    case "completeAgentMessage": {
+      const list = [...(state.itemsByThread[action.threadId] ?? [])];
+      const index = list.findIndex((msg) => msg.id === action.itemId);
+      if (index >= 0 && list[index].kind === "message") {
+        const existing = list[index];
+        list[index] = {
+          ...existing,
+          text: action.text || existing.text,
+        };
+      } else {
+        list.push({
+          id: action.itemId,
+          kind: "message",
+          role: "assistant",
+          text: action.text,
+        });
+      }
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(list),
+        },
+      };
+    }
+    case "upsertItem": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const item = normalizeItem(action.item);
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(upsertItem(list, item)),
+        },
+      };
+    }
+    case "setThreadItems":
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(action.items),
+        },
+      };
+    case "setLastAgentMessage":
+      if (
+        state.lastAgentMessageByThread[action.threadId]?.timestamp >= action.timestamp
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        lastAgentMessageByThread: {
+          ...state.lastAgentMessageByThread,
+          [action.threadId]: { text: action.text, timestamp: action.timestamp },
+        },
+      };
+    case "appendReasoningSummary": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const index = list.findIndex((entry) => entry.id === action.itemId);
+      const base =
+        index >= 0 && list[index].kind === "reasoning"
+          ? (list[index] as ConversationItem)
+          : {
+              id: action.itemId,
+              kind: "reasoning",
+              summary: "",
+              content: "",
+            };
+      const updated: ConversationItem = {
+        ...base,
+        summary: `${"summary" in base ? base.summary : ""}${action.delta}`,
+      } as ConversationItem;
+      const next = index >= 0 ? [...list] : [...list, updated];
+      if (index >= 0) {
+        next[index] = updated;
+      }
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(next),
+        },
+      };
+    }
+    case "appendReasoningContent": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const index = list.findIndex((entry) => entry.id === action.itemId);
+      const base =
+        index >= 0 && list[index].kind === "reasoning"
+          ? (list[index] as ConversationItem)
+          : {
+              id: action.itemId,
+              kind: "reasoning",
+              summary: "",
+              content: "",
+            };
+      const updated: ConversationItem = {
+        ...base,
+        content: `${"content" in base ? base.content : ""}${action.delta}`,
+      } as ConversationItem;
+      const next = index >= 0 ? [...list] : [...list, updated];
+      if (index >= 0) {
+        next[index] = updated;
+      }
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(next),
+        },
+      };
+    }
+    case "appendToolOutput": {
+      const list = state.itemsByThread[action.threadId] ?? [];
+      const index = list.findIndex((entry) => entry.id === action.itemId);
+      if (index < 0 || list[index].kind !== "tool") {
+        return state;
+      }
+      const existing = list[index];
+      const updated: ConversationItem = {
+        ...existing,
+        output: `${existing.output ?? ""}${action.delta}`,
+      } as ConversationItem;
+      const next = [...list];
+      next[index] = updated;
+      return {
+        ...state,
+        itemsByThread: {
+          ...state.itemsByThread,
+          [action.threadId]: prepareThreadItems(next),
+        },
+      };
+    }
+    case "addApproval":
+      return { ...state, approvals: [...state.approvals, action.approval] };
+    case "removeApproval":
+      return {
+        ...state,
+        approvals: state.approvals.filter(
+          (item) => item.request_id !== action.requestId,
+        ),
+      };
+    case "setThreads": {
+      return {
+        ...state,
+        threadsByWorkspace: {
+          ...state.threadsByWorkspace,
+          [action.workspaceId]: action.threads,
+        },
+      };
+    }
+    case "setThreadListLoading":
+      return {
+        ...state,
+        threadListLoadingByWorkspace: {
+          ...state.threadListLoadingByWorkspace,
+          [action.workspaceId]: action.isLoading,
+        },
+      };
+    case "setThreadTokenUsage":
+      return {
+        ...state,
+        tokenUsageByThread: {
+          ...state.tokenUsageByThread,
+          [action.threadId]: action.tokenUsage,
+        },
+      };
+    case "setRateLimits":
+      return {
+        ...state,
+        rateLimitsByWorkspace: {
+          ...state.rateLimitsByWorkspace,
+          [action.workspaceId]: action.rateLimits,
+        },
+      };
+    case "setThreadPlan":
+      return {
+        ...state,
+        planByThread: {
+          ...state.planByThread,
+          [action.threadId]: action.plan,
+        },
+      };
+    case "clearThreadPlan":
+      return {
+        ...state,
+        planByThread: {
+          ...state.planByThread,
+          [action.threadId]: null,
+        },
+      };
+    default:
+      return state;
+  }
+}

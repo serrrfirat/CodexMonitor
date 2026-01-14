@@ -24,6 +24,12 @@ type AppServerEventHandlers = {
   onAppServerEvent?: (event: AppServerEvent) => void;
   onTurnStarted?: (workspaceId: string, threadId: string, turnId: string) => void;
   onTurnCompleted?: (workspaceId: string, threadId: string, turnId: string) => void;
+  onTurnError?: (
+    workspaceId: string,
+    threadId: string,
+    turnId: string,
+    payload: { message: string; willRetry: boolean },
+  ) => void;
   onTurnPlanUpdated?: (
     workspaceId: string,
     threadId: string,
@@ -96,6 +102,22 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const turnId = String(turn?.id ?? "");
         if (threadId) {
           handlers.onTurnStarted?.(workspace_id, threadId, turnId);
+        }
+        return;
+      }
+
+      if (method === "error") {
+        const params = message.params as Record<string, unknown>;
+        const threadId = String(params.threadId ?? params.thread_id ?? "");
+        const turnId = String(params.turnId ?? params.turn_id ?? "");
+        const error = (params.error as Record<string, unknown> | undefined) ?? {};
+        const messageText = String(error.message ?? "");
+        const willRetry = Boolean(params.willRetry ?? params.will_retry);
+        if (threadId) {
+          handlers.onTurnError?.(workspace_id, threadId, turnId, {
+            message: messageText,
+            willRetry,
+          });
         }
         return;
       }

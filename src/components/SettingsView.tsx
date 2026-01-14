@@ -121,6 +121,10 @@ export function SettingsView({
           version: null,
           appServerOk: false,
           details: error instanceof Error ? error.message : String(error),
+          path: null,
+          nodeOk: false,
+          nodeVersion: null,
+          nodeDetails: null,
         },
       });
     }
@@ -310,8 +314,22 @@ export function SettingsView({
                       <div>
                         App-server: {doctorState.result.appServerOk ? "ok" : "failed"}
                       </div>
+                      <div>
+                        Node:{" "}
+                        {doctorState.result.nodeOk
+                          ? `ok (${doctorState.result.nodeVersion ?? "unknown"})`
+                          : "missing"}
+                      </div>
                       {doctorState.result.details && (
                         <div>{doctorState.result.details}</div>
+                      )}
+                      {doctorState.result.nodeDetails && (
+                        <div>{doctorState.result.nodeDetails}</div>
+                      )}
+                      {doctorState.result.path && (
+                        <div className="settings-doctor-path">
+                          PATH: {doctorState.result.path}
+                        </div>
                       )}
                     </div>
                   </div>

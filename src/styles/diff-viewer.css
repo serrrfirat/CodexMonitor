@@ -69,6 +69,51 @@
   white-space: pre-wrap;
 }
 
+.diff-line.is-selectable {
+  cursor: pointer;
+}
+
+.diff-line.is-selectable:hover {
+  background: color-mix(in srgb, var(--surface-active) 55%, transparent);
+  box-shadow: inset 3px 0 0 var(--border-accent-soft);
+}
+
+.diff-line.is-selected {
+  background: color-mix(in srgb, var(--surface-active) 75%, transparent);
+  position: relative;
+  box-shadow: inset 3px 0 0 var(--border-accent);
+}
+
+.diff-line.is-selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--border-accent);
+}
+
+.diff-line.is-selected .diff-gutter {
+  color: var(--text-strong);
+}
+
+.diff-line.is-selected.is-range-start {
+  border-radius: 0;
+}
+
+.diff-line.is-selected.is-range-end {
+  border-radius: 0;
+}
+
+.diff-line.is-selected.is-range-start.is-range-end {
+  border-radius: 0;
+}
+
+.diff-line.is-selectable:focus-visible {
+  outline: none;
+}
+
 .diff-gutter {
   display: grid;
   grid-template-columns: 1fr 1fr;

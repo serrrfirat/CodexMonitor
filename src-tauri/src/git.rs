@@ -1,12 +1,26 @@
 use git2::{BranchType, DiffOptions, Repository, Sort, Status, StatusOptions, Tree};
 use serde_json::json;
 use tauri::State;
+use tokio::process::Command;
 
 use crate::state::AppState;
 use crate::types::{
-    BranchInfo, GitFileDiff, GitFileStatus, GitLogEntry, GitLogResponse,
+    BranchInfo, GitFileDiff, GitFileStatus, GitHubIssue, GitHubIssuesResponse, GitLogEntry,
+    GitLogResponse,
 };
 use crate::utils::normalize_git_path;
+
+fn commit_to_entry(commit: git2::Commit) -> GitLogEntry {
+    let summary = commit.summary().unwrap_or("").to_string();
+    let author = commit.author().name().unwrap_or("").to_string();
+    let timestamp = commit.time().seconds();
+    GitLogEntry {
+        sha: commit.id().to_string(),
+        summary,
+        author,
+        timestamp,
+    }
+}
 
 fn checkout_branch(repo: &Repository, name: &str) -> Result<(), git2::Error> {
     let refname = format!("refs/heads/{name}");
@@ -58,6 +72,28 @@ fn diff_patch_to_string(patch: &mut git2::Patch) -> Result<String, git2::Error> 
         .as_str()
         .map(|value| value.to_string())
         .unwrap_or_else(|| String::from_utf8_lossy(&buf).to_string()))
+}
+
+fn parse_github_repo(remote_url: &str) -> Option<String> {
+    let trimmed = remote_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut path = if trimmed.starts_with("git@github.com:") {
+        trimmed.trim_start_matches("git@github.com:").to_string()
+    } else if trimmed.starts_with("ssh://git@github.com/") {
+        trimmed.trim_start_matches("ssh://git@github.com/").to_string()
+    } else if let Some(index) = trimmed.find("github.com/") {
+        trimmed[index + "github.com/".len()..].to_string()
+    } else {
+        return None;
+    };
+    path = path.trim_end_matches(".git").trim_end_matches('/').to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 #[tauri::command]
@@ -258,18 +294,75 @@ pub(crate) async fn get_git_log(
     for oid_result in revwalk.take(max_items) {
         let oid = oid_result.map_err(|e| e.to_string())?;
         let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
-        let summary = commit.summary().unwrap_or("").to_string();
-        let author = commit.author().name().unwrap_or("").to_string();
-        let timestamp = commit.time().seconds();
-        entries.push(GitLogEntry {
-            sha: commit.id().to_string(),
-            summary,
-            author,
-            timestamp,
-        });
+        entries.push(commit_to_entry(commit));
     }
 
-    Ok(GitLogResponse { total, entries })
+    let mut ahead = 0usize;
+    let mut behind = 0usize;
+    let mut ahead_entries = Vec::new();
+    let mut behind_entries = Vec::new();
+    let mut upstream = None;
+
+    if let Ok(head) = repo.head() {
+        if head.is_branch() {
+            if let Some(branch_name) = head.shorthand() {
+                if let Ok(branch) = repo.find_branch(branch_name, BranchType::Local) {
+                    if let Ok(upstream_branch) = branch.upstream() {
+                        let upstream_ref = upstream_branch.get();
+                        upstream = upstream_ref
+                            .shorthand()
+                            .map(|name| name.to_string())
+                            .or_else(|| upstream_ref.name().map(|name| name.to_string()));
+                        if let (Some(head_oid), Some(upstream_oid)) =
+                            (head.target(), upstream_ref.target())
+                        {
+                            let (ahead_count, behind_count) = repo
+                                .graph_ahead_behind(head_oid, upstream_oid)
+                                .map_err(|e| e.to_string())?;
+                            ahead = ahead_count;
+                            behind = behind_count;
+
+                            let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
+                            revwalk.push(head_oid).map_err(|e| e.to_string())?;
+                            revwalk.hide(upstream_oid).map_err(|e| e.to_string())?;
+                            revwalk
+                                .set_sorting(Sort::TIME)
+                                .map_err(|e| e.to_string())?;
+                            for oid_result in revwalk.take(max_items) {
+                                let oid = oid_result.map_err(|e| e.to_string())?;
+                                let commit =
+                                    repo.find_commit(oid).map_err(|e| e.to_string())?;
+                                ahead_entries.push(commit_to_entry(commit));
+                            }
+
+                            let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
+                            revwalk.push(upstream_oid).map_err(|e| e.to_string())?;
+                            revwalk.hide(head_oid).map_err(|e| e.to_string())?;
+                            revwalk
+                                .set_sorting(Sort::TIME)
+                                .map_err(|e| e.to_string())?;
+                            for oid_result in revwalk.take(max_items) {
+                                let oid = oid_result.map_err(|e| e.to_string())?;
+                                let commit =
+                                    repo.find_commit(oid).map_err(|e| e.to_string())?;
+                                behind_entries.push(commit_to_entry(commit));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(GitLogResponse {
+        total,
+        entries,
+        ahead,
+        behind,
+        ahead_entries,
+        behind_entries,
+        upstream,
+    })
 }
 
 #[tauri::command]
@@ -300,6 +393,96 @@ pub(crate) async fn get_git_remote(
     }
     let remote = repo.find_remote(&name).map_err(|e| e.to_string())?;
     Ok(remote.url().map(|url| url.to_string()))
+}
+
+#[tauri::command]
+pub(crate) async fn get_github_issues(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<GitHubIssuesResponse, String> {
+    let workspaces = state.workspaces.lock().await;
+    let entry = workspaces
+        .get(&workspace_id)
+        .ok_or("workspace not found")?
+        .clone();
+
+    let repo_name = {
+        let repo = Repository::open(&entry.path).map_err(|e| e.to_string())?;
+        let remotes = repo.remotes().map_err(|e| e.to_string())?;
+        let name = if remotes.iter().any(|remote| remote == Some("origin")) {
+            "origin".to_string()
+        } else {
+            remotes
+                .iter()
+                .flatten()
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        if name.is_empty() {
+            return Err("No git remote configured.".to_string());
+        }
+        let remote = repo.find_remote(&name).map_err(|e| e.to_string())?;
+        let remote_url = remote
+            .url()
+            .ok_or("Remote has no URL configured.")?;
+        parse_github_repo(remote_url).ok_or("Remote is not a GitHub repository.")?
+    };
+
+    let output = Command::new("gh")
+        .args([
+            "issue",
+            "list",
+            "--repo",
+            &repo_name,
+            "--limit",
+            "50",
+            "--json",
+            "number,title,url,updatedAt",
+        ])
+        .current_dir(&entry.path)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        if detail.is_empty() {
+            return Err("GitHub CLI command failed.".to_string());
+        }
+        return Err(detail.to_string());
+    }
+
+    let issues: Vec<GitHubIssue> =
+        serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+
+    let search_query = format!("repo:{repo_name} is:issue is:open");
+    let search_query = search_query.replace(' ', "+");
+    let total = match Command::new("gh")
+        .args([
+            "api",
+            &format!("/search/issues?q={search_query}"),
+            "--jq",
+            ".total_count",
+        ])
+        .current_dir(&entry.path)
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(issues.len()),
+        _ => issues.len(),
+    };
+
+    Ok(GitHubIssuesResponse { total, issues })
 }
 
 #[tauri::command]

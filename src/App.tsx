@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./styles/base.css";
 import "./styles/buttons.css";
@@ -48,6 +48,7 @@ import { useWindowDrag } from "./hooks/useWindowDrag";
 import { useGitStatus } from "./hooks/useGitStatus";
 import { useGitDiffs } from "./hooks/useGitDiffs";
 import { useGitLog } from "./hooks/useGitLog";
+import { useGitHubIssues } from "./hooks/useGitHubIssues";
 import { useGitRemote } from "./hooks/useGitRemote";
 import { useModels } from "./hooks/useModels";
 import { useOpenCodeModels } from "./hooks/useOpenCodeModels";
@@ -62,7 +63,13 @@ import { useLayoutMode } from "./hooks/useLayoutMode";
 import { useAppSettings } from "./hooks/useAppSettings";
 import { useUpdater } from "./hooks/useUpdater";
 import { useHandoffTldr } from "./hooks/useHandoffTldr";
-import type { AccessMode, BackendType, QueuedMessage, WorkspaceInfo } from "./types";
+import type {
+  AccessMode,
+  BackendType,
+  DiffLineReference,
+  QueuedMessage,
+  WorkspaceInfo,
+} from "./types";
 
 function useWindowLabel() {
   const [label, setLabel] = useState("main");
@@ -94,7 +101,9 @@ function MainApp() {
   const isPhone = layoutMode === "phone";
   const [centerMode, setCenterMode] = useState<"chat" | "diff">("chat");
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
-  const [gitPanelMode, setGitPanelMode] = useState<"diff" | "log">("diff");
+  const [gitPanelMode, setGitPanelMode] = useState<
+    "diff" | "log" | "issues"
+  >("diff");
   const [accessMode, setAccessMode] = useState<AccessMode>("current");
   const [activeTab, setActiveTab] = useState<
     "projects" | "codex" | "git" | "log"
@@ -104,6 +113,7 @@ function MainApp() {
     Record<string, QueuedMessage[]>
   >({});
   const [prefillDraft, setPrefillDraft] = useState<QueuedMessage | null>(null);
+  const [composerInsert, setComposerInsert] = useState<QueuedMessage | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openCodePickerOpen, setOpenCodePickerOpen] = useState(false);
   const [reduceTransparency, setReduceTransparency] = useState(() => {
@@ -166,6 +176,7 @@ function MainApp() {
   const compactTab = isTablet ? tabletTab : activeTab;
   const shouldLoadDiffs =
     centerMode === "diff" || (isCompact && compactTab === "git");
+  const shouldLoadGitLog = Boolean(activeWorkspace);
   const {
     diffs: gitDiffs,
     isLoading: isDiffLoading,
@@ -174,9 +185,20 @@ function MainApp() {
   const {
     entries: gitLogEntries,
     total: gitLogTotal,
+    ahead: gitLogAhead,
+    behind: gitLogBehind,
+    aheadEntries: gitLogAheadEntries,
+    behindEntries: gitLogBehindEntries,
+    upstream: gitLogUpstream,
     isLoading: gitLogLoading,
     error: gitLogError,
-  } = useGitLog(activeWorkspace, gitPanelMode === "log");
+  } = useGitLog(activeWorkspace, shouldLoadGitLog);
+  const {
+    issues: gitIssues,
+    total: gitIssuesTotal,
+    isLoading: gitIssuesLoading,
+    error: gitIssuesError,
+  } = useGitHubIssues(activeWorkspace, gitPanelMode === "issues");
   const { remote: gitRemoteUrl } = useGitRemote(activeWorkspace);
   const {
     models,
@@ -228,6 +250,7 @@ function MainApp() {
     tokenUsageByThread,
     rateLimitsByWorkspace,
     planByThread,
+    lastAgentMessageByThread,
     interruptTurn,
     removeThread,
     startThreadForWorkspace,
@@ -261,6 +284,40 @@ function MainApp() {
 
   const isOpenCodeMode = Boolean(activeSessionId) && !activeThreadId;
   const activeItems = isOpenCodeMode ? openCodeActiveItems : codexActiveItems;
+
+  const latestAgentRuns = useMemo(() => {
+    const entries: Array<{
+      threadId: string;
+      message: string;
+      timestamp: number;
+      projectName: string;
+      workspaceId: string;
+      isProcessing: boolean;
+    }> = [];
+    workspaces.forEach((workspace) => {
+      const threads = threadsByWorkspace[workspace.id] ?? [];
+      threads.forEach((thread) => {
+        const entry = lastAgentMessageByThread[thread.id];
+        if (!entry) {
+          return;
+        }
+        entries.push({
+          threadId: thread.id,
+          message: entry.text,
+          timestamp: entry.timestamp,
+          projectName: workspace.name,
+          workspaceId: workspace.id,
+          isProcessing: threadStatusById[thread.id]?.isProcessing ?? false,
+        });
+      });
+    });
+    return entries.sort((a, b) => b.timestamp - a.timestamp).slice(0, 3);
+  }, [
+    lastAgentMessageByThread,
+    threadStatusById,
+    threadsByWorkspace,
+    workspaces,
+  ]);
 
   const activeRateLimits = activeWorkspaceId
     ? rateLimitsByWorkspace[activeWorkspaceId] ?? null
@@ -479,6 +536,36 @@ function MainApp() {
     }
   }
 
+  function handleDiffLineReference(reference: DiffLineReference) {
+    const startLine = reference.newLine ?? reference.oldLine;
+    const endLine =
+      reference.endNewLine ?? reference.endOldLine ?? startLine ?? null;
+    const lineRange =
+      startLine && endLine && endLine !== startLine
+        ? `${startLine}-${endLine}`
+        : startLine
+          ? `${startLine}`
+          : null;
+    const lineLabel = lineRange ? `${reference.path}:${lineRange}` : reference.path;
+    const changeLabel =
+      reference.type === "add"
+        ? "added"
+        : reference.type === "del"
+          ? "removed"
+          : reference.type === "mixed"
+            ? "mixed"
+            : "context";
+    const snippet = reference.lines.join("\n").trimEnd();
+    const snippetBlock = snippet ? `\n\`\`\`\n${snippet}\n\`\`\`` : "";
+    const label = reference.lines.length > 1 ? "Line range" : "Line reference";
+    const text = `${label} (${changeLabel}): ${lineLabel}${snippetBlock}`;
+    setComposerInsert({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      createdAt: Date.now(),
+    });
+  }
+
   async function handleSend(text: string) {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -617,7 +704,7 @@ function MainApp() {
   };
 
   const showComposer = !isCompact
-    ? centerMode === "chat"
+    ? centerMode === "chat" || centerMode === "diff"
     : (isTablet ? tabletTab : activeTab) === "codex";
   const showGitDetail = Boolean(selectedDiffPath) && isPhone;
   const appClassName = `app ${isCompact ? "layout-compact" : "layout-desktop"}${
@@ -740,6 +827,12 @@ function MainApp() {
           setPrefillDraft(null);
         }
       }}
+      insertText={composerInsert}
+      onInsertHandled={(id) => {
+        if (composerInsert?.id === id) {
+          setComposerInsert(null);
+        }
+      }}
       onEditQueued={(item) => {
         if (!activeThreadId) {
           return;
@@ -800,7 +893,15 @@ function MainApp() {
           <Home
             onOpenProject={handleAddWorkspace}
             onAddWorkspace={handleAddWorkspace}
-            onCloneRepository={() => {}}
+            latestAgentRuns={latestAgentRuns}
+            onSelectThread={(workspaceId, threadId) => {
+              exitDiffView();
+              selectWorkspace(workspaceId);
+              setActiveThreadId(threadId, workspaceId);
+              if (isCompact) {
+                setActiveTab("codex");
+              }
+            }}
           />
         )}
 
@@ -849,6 +950,7 @@ function MainApp() {
                   selectedPath={selectedDiffPath}
                   isLoading={isDiffLoading}
                   error={diffError}
+                  onLineReference={handleDiffLineReference}
                 />
               ) : (
                 conversationNode
@@ -879,6 +981,15 @@ function MainApp() {
                   onSelectFile={handleSelectDiff}
                   logEntries={gitLogEntries}
                   logTotal={gitLogTotal}
+                  logAhead={gitLogAhead}
+                  logBehind={gitLogBehind}
+                  logAheadEntries={gitLogAheadEntries}
+                  logBehindEntries={gitLogBehindEntries}
+                  logUpstream={gitLogUpstream}
+                  issues={gitIssues}
+                  issuesTotal={gitIssuesTotal}
+                  issuesLoading={gitIssuesLoading}
+                  issuesError={gitIssuesError}
                   gitRemoteUrl={gitRemoteUrl}
                 />
               </div>
@@ -934,7 +1045,15 @@ function MainApp() {
           <Home
             onOpenProject={handleAddWorkspace}
             onAddWorkspace={handleAddWorkspace}
-            onCloneRepository={() => {}}
+            latestAgentRuns={latestAgentRuns}
+            onSelectThread={(workspaceId, threadId) => {
+              exitDiffView();
+              selectWorkspace(workspaceId);
+              setActiveThreadId(threadId, workspaceId);
+              if (isCompact) {
+                setActiveTab("codex");
+              }
+            }}
           />
         )}
         {activeWorkspace && !showHome && (
@@ -981,6 +1100,15 @@ function MainApp() {
                   onSelectFile={handleSelectDiff}
                   logEntries={gitLogEntries}
                   logTotal={gitLogTotal}
+                  logAhead={gitLogAhead}
+                  logBehind={gitLogBehind}
+                  logAheadEntries={gitLogAheadEntries}
+                  logBehindEntries={gitLogBehindEntries}
+                  logUpstream={gitLogUpstream}
+                  issues={gitIssues}
+                  issuesTotal={gitIssuesTotal}
+                  issuesLoading={gitIssuesLoading}
+                  issuesError={gitIssuesError}
                   gitRemoteUrl={gitRemoteUrl}
                 />
                 <div className="tablet-git-viewer">
@@ -989,6 +1117,7 @@ function MainApp() {
                     selectedPath={selectedDiffPath}
                     isLoading={isDiffLoading}
                     error={diffError}
+                    onLineReference={handleDiffLineReference}
                   />
                 </div>
               </div>
@@ -1088,6 +1217,7 @@ function MainApp() {
                   selectedPath={selectedDiffPath}
                   isLoading={isDiffLoading}
                   error={diffError}
+                  onLineReference={handleDiffLineReference}
                 />
               </div>
             </>
@@ -1127,6 +1257,15 @@ function MainApp() {
                     onSelectFile={handleSelectDiff}
                     logEntries={gitLogEntries}
                     logTotal={gitLogTotal}
+                    logAhead={gitLogAhead}
+                    logBehind={gitLogBehind}
+                    logAheadEntries={gitLogAheadEntries}
+                    logBehindEntries={gitLogBehindEntries}
+                    logUpstream={gitLogUpstream}
+                    issues={gitIssues}
+                    issuesTotal={gitIssuesTotal}
+                    issuesLoading={gitIssuesLoading}
+                    issuesError={gitIssuesError}
                     gitRemoteUrl={gitRemoteUrl}
                   />
                 </div>
@@ -1137,6 +1276,7 @@ function MainApp() {
                       selectedPath={selectedDiffPath}
                       isLoading={isDiffLoading}
                       error={diffError}
+                      onLineReference={handleDiffLineReference}
                     />
                   </div>
                 )}

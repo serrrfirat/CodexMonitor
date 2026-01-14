@@ -39,6 +39,7 @@ export function ComposerInput({
 }: ComposerInputProps) {
   const suggestionListRef = useRef<HTMLDivElement | null>(null);
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const maxTextareaHeight = 120;
   const isFileSuggestion = (item: AutocompleteItem) =>
     item.label.includes("/") || item.label.includes("\\");
   const fileTitle = (path: string) => {
@@ -66,6 +67,18 @@ export function ComposerInput({
       item.scrollIntoView({ block: "nearest" });
     }
   }, [highlightIndex, suggestionsOpen, suggestions.length]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxTextareaHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > maxTextareaHeight ? "auto" : "hidden";
+  }, [text, textareaRef]);
 
   return (
     <div className="composer-input">

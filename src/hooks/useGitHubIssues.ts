@@ -1,38 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GitLogEntry, WorkspaceInfo } from "../types";
-import { getGitLog } from "../services/tauri";
+import type { GitHubIssue, WorkspaceInfo } from "../types";
+import { getGitHubIssues } from "../services/tauri";
 
-type GitLogState = {
-  entries: GitLogEntry[];
+type GitHubIssuesState = {
+  issues: GitHubIssue[];
   total: number;
-  ahead: number;
-  behind: number;
-  aheadEntries: GitLogEntry[];
-  behindEntries: GitLogEntry[];
-  upstream: string | null;
   isLoading: boolean;
   error: string | null;
 };
 
-const emptyState: GitLogState = {
-  entries: [],
+const emptyState: GitHubIssuesState = {
+  issues: [],
   total: 0,
-  ahead: 0,
-  behind: 0,
-  aheadEntries: [],
-  behindEntries: [],
-  upstream: null,
   isLoading: false,
   error: null,
 };
 
-const REFRESH_INTERVAL_MS = 10000;
-
-export function useGitLog(
+export function useGitHubIssues(
   activeWorkspace: WorkspaceInfo | null,
   enabled: boolean,
 ) {
-  const [state, setState] = useState<GitLogState>(emptyState);
+  const [state, setState] = useState<GitHubIssuesState>(emptyState);
   const requestIdRef = useRef(0);
   const workspaceIdRef = useRef<string | null>(activeWorkspace?.id ?? null);
 
@@ -46,7 +34,7 @@ export function useGitLog(
     requestIdRef.current = requestId;
     setState((prev) => ({ ...prev, isLoading: true, error: null }));
     try {
-      const response = await getGitLog(workspaceId);
+      const response = await getGitHubIssues(workspaceId);
       if (
         requestIdRef.current !== requestId ||
         workspaceIdRef.current !== workspaceId
@@ -54,18 +42,13 @@ export function useGitLog(
         return;
       }
       setState({
-        entries: response.entries,
+        issues: response.issues,
         total: response.total,
-        ahead: response.ahead,
-        behind: response.behind,
-        aheadEntries: response.aheadEntries,
-        behindEntries: response.behindEntries,
-        upstream: response.upstream,
         isLoading: false,
         error: null,
       });
     } catch (error) {
-      console.error("Failed to load git log", error);
+      console.error("Failed to load GitHub issues", error);
       if (
         requestIdRef.current !== requestId ||
         workspaceIdRef.current !== workspaceId
@@ -73,13 +56,8 @@ export function useGitLog(
         return;
       }
       setState({
-        entries: [],
+        issues: [],
         total: 0,
-        ahead: 0,
-        behind: 0,
-        aheadEntries: [],
-        behindEntries: [],
-        upstream: null,
         isLoading: false,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -96,26 +74,15 @@ export function useGitLog(
   }, [activeWorkspace?.id]);
 
   useEffect(() => {
-    if (!enabled || !activeWorkspace) {
+    if (!enabled) {
       return;
     }
     void refresh();
-    const interval = window.setInterval(() => {
-      refresh().catch(() => {});
-    }, REFRESH_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [activeWorkspace, enabled, refresh]);
+  }, [enabled, refresh]);
 
   return {
-    entries: state.entries,
+    issues: state.issues,
     total: state.total,
-    ahead: state.ahead,
-    behind: state.behind,
-    aheadEntries: state.aheadEntries,
-    behindEntries: state.behindEntries,
-    upstream: state.upstream,
     isLoading: state.isLoading,
     error: state.error,
     refresh,

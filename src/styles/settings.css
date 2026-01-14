@@ -285,6 +285,11 @@
   flex-direction: column;
   gap: 4px;
 }
+
+.settings-doctor-path {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
 .settings-empty {
   color: var(--text-faint);
   font-size: 12px;

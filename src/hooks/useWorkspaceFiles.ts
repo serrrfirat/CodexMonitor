@@ -15,6 +15,7 @@ export function useWorkspaceFiles({
   const lastFetchedWorkspaceId = useRef<string | null>(null);
   const inFlight = useRef(false);
 
+  const REFRESH_INTERVAL_MS = 5000;
   const workspaceId = activeWorkspace?.id ?? null;
   const isConnected = Boolean(activeWorkspace?.connected);
 
@@ -66,6 +67,20 @@ export function useWorkspaceFiles({
     }
     refreshFiles();
   }, [files.length, isConnected, refreshFiles, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !isConnected) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      refreshFiles().catch(() => {});
+    }, REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isConnected, refreshFiles, workspaceId]);
 
   const fileOptions = useMemo(() => files.filter(Boolean), [files]);
 

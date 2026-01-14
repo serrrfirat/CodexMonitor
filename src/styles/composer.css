@@ -77,6 +77,8 @@
 }
 
 .composer textarea {
+  min-height: 60px;
+  max-height: 120px;
   height: 60px;
   width: 100%;
   resize: none;
@@ -87,6 +89,7 @@
   padding: 8px 4px;
   font-size: 14px;
   -webkit-app-region: no-drag;
+  overflow-y: hidden;
 }
 
 .composer textarea:focus {

@@ -77,6 +77,10 @@ export type CodexDoctorResult = {
   version: string | null;
   appServerOk: boolean;
   details: string | null;
+  path: string | null;
+  nodeOk: boolean;
+  nodeVersion: string | null;
+  nodeDetails: string | null;
 };
 
 export type ApprovalRequest = {
@@ -98,6 +102,16 @@ export type GitFileDiff = {
   diff: string;
 };
 
+export type DiffLineReference = {
+  path: string;
+  type: "add" | "del" | "context" | "mixed";
+  oldLine: number | null;
+  newLine: number | null;
+  endOldLine: number | null;
+  endNewLine: number | null;
+  lines: string[];
+};
+
 export type GitLogEntry = {
   sha: string;
   summary: string;
@@ -108,6 +122,23 @@ export type GitLogEntry = {
 export type GitLogResponse = {
   total: number;
   entries: GitLogEntry[];
+  ahead: number;
+  behind: number;
+  aheadEntries: GitLogEntry[];
+  behindEntries: GitLogEntry[];
+  upstream: string | null;
+};
+
+export type GitHubIssue = {
+  number: number;
+  title: string;
+  url: string;
+  updatedAt: string;
+};
+
+export type GitHubIssuesResponse = {
+  total: number;
+  issues: GitHubIssue[];
 };
 
 export type TokenUsageBreakdown = {

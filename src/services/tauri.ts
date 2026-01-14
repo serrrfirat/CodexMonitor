@@ -11,7 +11,13 @@ import type {
   WorkspaceInfo,
   WorkspaceSettings,
 } from "../types";
-import type { GitFileDiff, GitFileStatus, GitLogResponse, ReviewTarget } from "../types";
+import type {
+  GitFileDiff,
+  GitFileStatus,
+  GitHubIssuesResponse,
+  GitLogResponse,
+  ReviewTarget,
+} from "../types";
 
 // ============================================================================
 // File Picker
@@ -153,6 +159,12 @@ export async function getGitLog(
 
 export async function getGitRemote(workspace_id: string): Promise<string | null> {
   return invoke("get_git_remote", { workspaceId: workspace_id });
+}
+
+export async function getGitHubIssues(
+  workspace_id: string,
+): Promise<GitHubIssuesResponse> {
+  return invoke("get_github_issues", { workspaceId: workspace_id });
 }
 
 export async function getModelList(workspaceId: string) {

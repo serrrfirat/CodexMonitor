@@ -5,7 +5,6 @@ import type {
   ConversationItem,
   DebugEntry,
   RateLimitSnapshot,
-  ThreadSummary,
   ThreadTokenUsage,
   TurnPlan,
   TurnPlanStep,
@@ -24,88 +23,19 @@ import {
   interruptTurn as interruptTurnService,
 } from "../services/tauri";
 import { useAppServerEvents } from "./useAppServerEvents";
+import {
+  buildConversationItem,
+  buildItemsFromThread,
+  getThreadTimestamp,
+  isReviewingFromThread,
+  mergeThreadItems,
+  previewThreadName,
+} from "../utils/threadItems";
+import { initialState, threadReducer } from "./useThreadsReducer";
 
-const emptyItems: Record<string, ConversationItem[]> = {};
-const MAX_ITEMS_PER_THREAD = 400;
-const MAX_ITEM_TEXT = 20000;
-const NO_TRUNCATE_TOOL_TYPES = new Set(["fileChange", "commandExecution"]);
 const STORAGE_KEY_THREAD_ACTIVITY = "codexmonitor.threadLastUserActivity";
 
 type ThreadActivityMap = Record<string, Record<string, number>>;
-
-type ThreadState = {
-  activeThreadIdByWorkspace: Record<string, string | null>;
-  itemsByThread: Record<string, ConversationItem[]>;
-  threadsByWorkspace: Record<string, ThreadSummary[]>;
-  threadStatusById: Record<
-    string,
-    { isProcessing: boolean; hasUnread: boolean; isReviewing: boolean }
-  >;
-  threadListLoadingByWorkspace: Record<string, boolean>;
-  activeTurnIdByThread: Record<string, string | null>;
-  approvals: ApprovalRequest[];
-  tokenUsageByThread: Record<string, ThreadTokenUsage>;
-  rateLimitsByWorkspace: Record<string, RateLimitSnapshot | null>;
-  planByThread: Record<string, TurnPlan | null>;
-};
-
-type ThreadAction =
-  | { type: "setActiveThreadId"; workspaceId: string; threadId: string | null }
-  | { type: "ensureThread"; workspaceId: string; threadId: string }
-  | { type: "removeThread"; workspaceId: string; threadId: string }
-  | { type: "markProcessing"; threadId: string; isProcessing: boolean }
-  | { type: "markReviewing"; threadId: string; isReviewing: boolean }
-  | { type: "markUnread"; threadId: string; hasUnread: boolean }
-  | {
-      type: "addUserMessage";
-      workspaceId: string;
-      threadId: string;
-      text: string;
-    }
-  | { type: "addAssistantMessage"; threadId: string; text: string }
-  | { type: "setThreadName"; workspaceId: string; threadId: string; name: string }
-  | { type: "appendAgentDelta"; threadId: string; itemId: string; delta: string }
-  | { type: "completeAgentMessage"; threadId: string; itemId: string; text: string }
-  | { type: "upsertItem"; threadId: string; item: ConversationItem }
-  | { type: "setThreadItems"; threadId: string; items: ConversationItem[] }
-  | {
-      type: "appendReasoningSummary";
-      threadId: string;
-      itemId: string;
-      delta: string;
-    }
-  | { type: "appendReasoningContent"; threadId: string; itemId: string; delta: string }
-  | { type: "appendToolOutput"; threadId: string; itemId: string; delta: string }
-  | { type: "setThreads"; workspaceId: string; threads: ThreadSummary[] }
-  | {
-      type: "setThreadListLoading";
-      workspaceId: string;
-      isLoading: boolean;
-    }
-  | { type: "addApproval"; approval: ApprovalRequest }
-  | { type: "removeApproval"; requestId: number }
-  | { type: "setThreadTokenUsage"; threadId: string; tokenUsage: ThreadTokenUsage }
-  | {
-      type: "setRateLimits";
-      workspaceId: string;
-      rateLimits: RateLimitSnapshot | null;
-    }
-  | { type: "setActiveTurnId"; threadId: string; turnId: string | null }
-  | { type: "setThreadPlan"; threadId: string; plan: TurnPlan | null }
-  | { type: "clearThreadPlan"; threadId: string };
-
-const initialState: ThreadState = {
-  activeThreadIdByWorkspace: {},
-  itemsByThread: emptyItems,
-  threadsByWorkspace: {},
-  threadStatusById: {},
-  threadListLoadingByWorkspace: {},
-  activeTurnIdByThread: {},
-  approvals: [],
-  tokenUsageByThread: {},
-  rateLimitsByWorkspace: {},
-  planByThread: {},
-};
 
 function loadThreadActivity(): ThreadActivityMap {
   if (typeof window === "undefined") {
@@ -140,462 +70,6 @@ function saveThreadActivity(activity: ThreadActivityMap) {
   }
 }
 
-function upsertItem(list: ConversationItem[], item: ConversationItem) {
-  const index = list.findIndex((entry) => entry.id === item.id);
-  if (index === -1) {
-    return [...list, item];
-  }
-  const next = [...list];
-  next[index] = { ...next[index], ...item };
-  return next;
-}
-
-function truncateText(text: string, maxLength = MAX_ITEM_TEXT) {
-  if (text.length <= maxLength) {
-    return text;
-  }
-  const sliceLength = Math.max(0, maxLength - 3);
-  return `${text.slice(0, sliceLength)}...`;
-}
-
-function normalizeItem(item: ConversationItem): ConversationItem {
-  if (item.kind === "message") {
-    return { ...item, text: truncateText(item.text) };
-  }
-  if (item.kind === "reasoning") {
-    return {
-      ...item,
-      summary: truncateText(item.summary),
-      content: truncateText(item.content),
-    };
-  }
-  if (item.kind === "diff") {
-    return { ...item, diff: truncateText(item.diff) };
-  }
-  if (item.kind === "tool") {
-    const isNoTruncateTool = NO_TRUNCATE_TOOL_TYPES.has(item.toolType);
-    return {
-      ...item,
-      title: truncateText(item.title, 200),
-      detail: truncateText(item.detail, 2000),
-      output: isNoTruncateTool
-        ? item.output
-        : item.output
-          ? truncateText(item.output)
-          : item.output,
-      changes: item.changes
-        ? item.changes.map((change) => ({
-            ...change,
-            diff:
-              isNoTruncateTool || !change.diff
-                ? change.diff
-                : truncateText(change.diff),
-          }))
-        : item.changes,
-    };
-  }
-  return item;
-}
-
-function prepareThreadItems(items: ConversationItem[]) {
-  const normalized = items.map((item) => normalizeItem(item));
-  return normalized.length > MAX_ITEMS_PER_THREAD
-    ? normalized.slice(-MAX_ITEMS_PER_THREAD)
-    : normalized;
-}
-
-function threadReducer(state: ThreadState, action: ThreadAction): ThreadState {
-  switch (action.type) {
-    case "setActiveThreadId":
-      return {
-        ...state,
-        activeThreadIdByWorkspace: {
-          ...state.activeThreadIdByWorkspace,
-          [action.workspaceId]: action.threadId,
-        },
-        threadStatusById: action.threadId
-          ? {
-              ...state.threadStatusById,
-              [action.threadId]: {
-                isProcessing:
-                  state.threadStatusById[action.threadId]?.isProcessing ?? false,
-                hasUnread: false,
-                isReviewing:
-                  state.threadStatusById[action.threadId]?.isReviewing ?? false,
-              },
-            }
-          : state.threadStatusById,
-      };
-    case "ensureThread": {
-      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
-      if (list.some((thread) => thread.id === action.threadId)) {
-        return state;
-      }
-      const thread: ThreadSummary = {
-        id: action.threadId,
-        name: `Agent ${list.length + 1}`,
-      };
-      return {
-        ...state,
-        threadsByWorkspace: {
-          ...state.threadsByWorkspace,
-          [action.workspaceId]: [thread, ...list],
-        },
-        threadStatusById: {
-          ...state.threadStatusById,
-          [action.threadId]: {
-            isProcessing: false,
-            hasUnread: false,
-            isReviewing: false,
-          },
-        },
-        activeThreadIdByWorkspace: {
-          ...state.activeThreadIdByWorkspace,
-          [action.workspaceId]:
-            state.activeThreadIdByWorkspace[action.workspaceId] ?? action.threadId,
-        },
-      };
-    }
-    case "removeThread": {
-      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
-      const filtered = list.filter((thread) => thread.id !== action.threadId);
-      const nextActive =
-        state.activeThreadIdByWorkspace[action.workspaceId] === action.threadId
-          ? filtered[0]?.id ?? null
-          : state.activeThreadIdByWorkspace[action.workspaceId] ?? null;
-      const { [action.threadId]: _, ...restItems } = state.itemsByThread;
-      const { [action.threadId]: __, ...restStatus } = state.threadStatusById;
-      const { [action.threadId]: ___, ...restTurns } = state.activeTurnIdByThread;
-      const { [action.threadId]: ____, ...restPlans } = state.planByThread;
-      return {
-        ...state,
-        threadsByWorkspace: {
-          ...state.threadsByWorkspace,
-          [action.workspaceId]: filtered,
-        },
-        itemsByThread: restItems,
-        threadStatusById: restStatus,
-        activeTurnIdByThread: restTurns,
-        planByThread: restPlans,
-        activeThreadIdByWorkspace: {
-          ...state.activeThreadIdByWorkspace,
-          [action.workspaceId]: nextActive,
-        },
-      };
-    }
-    case "markProcessing":
-      return {
-        ...state,
-        threadStatusById: {
-          ...state.threadStatusById,
-          [action.threadId]: {
-            isProcessing: action.isProcessing,
-            hasUnread: state.threadStatusById[action.threadId]?.hasUnread ?? false,
-            isReviewing:
-              state.threadStatusById[action.threadId]?.isReviewing ?? false,
-          },
-        },
-      };
-    case "setActiveTurnId":
-      return {
-        ...state,
-        activeTurnIdByThread: {
-          ...state.activeTurnIdByThread,
-          [action.threadId]: action.turnId,
-        },
-      };
-    case "markReviewing":
-      return {
-        ...state,
-        threadStatusById: {
-          ...state.threadStatusById,
-          [action.threadId]: {
-            isProcessing:
-              state.threadStatusById[action.threadId]?.isProcessing ?? false,
-            hasUnread: state.threadStatusById[action.threadId]?.hasUnread ?? false,
-            isReviewing: action.isReviewing,
-          },
-        },
-      };
-    case "markUnread":
-      return {
-        ...state,
-        threadStatusById: {
-          ...state.threadStatusById,
-          [action.threadId]: {
-            isProcessing:
-              state.threadStatusById[action.threadId]?.isProcessing ?? false,
-            hasUnread: action.hasUnread,
-            isReviewing:
-              state.threadStatusById[action.threadId]?.isReviewing ?? false,
-          },
-        },
-      };
-    case "addUserMessage": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const message: ConversationItem = {
-        id: `${Date.now()}-user`,
-        kind: "message",
-        role: "user",
-        text: action.text,
-      };
-      const threads = state.threadsByWorkspace[action.workspaceId] ?? [];
-      const bumpedThreads = threads.length
-        ? [
-            ...threads.filter((thread) => thread.id === action.threadId),
-            ...threads.filter((thread) => thread.id !== action.threadId),
-          ]
-        : threads;
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems([...list, message]),
-        },
-        threadsByWorkspace: {
-          ...state.threadsByWorkspace,
-          [action.workspaceId]: bumpedThreads,
-        },
-      };
-    }
-    case "addAssistantMessage": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const message: ConversationItem = {
-        id: `${Date.now()}-assistant`,
-        kind: "message",
-        role: "assistant",
-        text: action.text,
-      };
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems([...list, message]),
-        },
-      };
-    }
-    case "setThreadName": {
-      const list = state.threadsByWorkspace[action.workspaceId] ?? [];
-      const next = list.map((thread) =>
-        thread.id === action.threadId ? { ...thread, name: action.name } : thread,
-      );
-      return {
-        ...state,
-        threadsByWorkspace: {
-          ...state.threadsByWorkspace,
-          [action.workspaceId]: next,
-        },
-      };
-    }
-    case "appendAgentDelta": {
-      const list = [...(state.itemsByThread[action.threadId] ?? [])];
-      const index = list.findIndex((msg) => msg.id === action.itemId);
-      if (index >= 0 && list[index].kind === "message") {
-        const existing = list[index];
-        list[index] = {
-          ...existing,
-          text: `${existing.text}${action.delta}`,
-        };
-      } else {
-        list.push({
-          id: action.itemId,
-          kind: "message",
-          role: "assistant",
-          text: action.delta,
-        });
-      }
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(list),
-        },
-      };
-    }
-    case "completeAgentMessage": {
-      const list = [...(state.itemsByThread[action.threadId] ?? [])];
-      const index = list.findIndex((msg) => msg.id === action.itemId);
-      if (index >= 0 && list[index].kind === "message") {
-        const existing = list[index];
-        list[index] = {
-          ...existing,
-          text: action.text || existing.text,
-        };
-      } else {
-        list.push({
-          id: action.itemId,
-          kind: "message",
-          role: "assistant",
-          text: action.text,
-        });
-      }
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(list),
-        },
-      };
-    }
-    case "upsertItem": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const item = normalizeItem(action.item);
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(upsertItem(list, item)),
-        },
-      };
-    }
-    case "setThreadItems":
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(action.items),
-        },
-      };
-    case "appendReasoningSummary": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const index = list.findIndex((entry) => entry.id === action.itemId);
-      const base =
-        index >= 0 && list[index].kind === "reasoning"
-          ? (list[index] as ConversationItem)
-          : {
-              id: action.itemId,
-              kind: "reasoning",
-              summary: "",
-              content: "",
-            };
-      const updated: ConversationItem = {
-        ...base,
-        summary: `${"summary" in base ? base.summary : ""}${action.delta}`,
-      } as ConversationItem;
-      const next = index >= 0 ? [...list] : [...list, updated];
-      if (index >= 0) {
-        next[index] = updated;
-      }
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(next),
-        },
-      };
-    }
-    case "appendReasoningContent": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const index = list.findIndex((entry) => entry.id === action.itemId);
-      const base =
-        index >= 0 && list[index].kind === "reasoning"
-          ? (list[index] as ConversationItem)
-          : {
-              id: action.itemId,
-              kind: "reasoning",
-              summary: "",
-              content: "",
-            };
-      const updated: ConversationItem = {
-        ...base,
-        content: `${"content" in base ? base.content : ""}${action.delta}`,
-      } as ConversationItem;
-      const next = index >= 0 ? [...list] : [...list, updated];
-      if (index >= 0) {
-        next[index] = updated;
-      }
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(next),
-        },
-      };
-    }
-    case "appendToolOutput": {
-      const list = state.itemsByThread[action.threadId] ?? [];
-      const index = list.findIndex((entry) => entry.id === action.itemId);
-      if (index < 0 || list[index].kind !== "tool") {
-        return state;
-      }
-      const existing = list[index];
-      const updated: ConversationItem = {
-        ...existing,
-        output: `${existing.output ?? ""}${action.delta}`,
-      } as ConversationItem;
-      const next = [...list];
-      next[index] = updated;
-      return {
-        ...state,
-        itemsByThread: {
-          ...state.itemsByThread,
-          [action.threadId]: prepareThreadItems(next),
-        },
-      };
-    }
-    case "addApproval":
-      return { ...state, approvals: [...state.approvals, action.approval] };
-    case "removeApproval":
-      return {
-        ...state,
-        approvals: state.approvals.filter(
-          (item) => item.request_id !== action.requestId,
-        ),
-      };
-    case "setThreads": {
-      return {
-        ...state,
-        threadsByWorkspace: {
-          ...state.threadsByWorkspace,
-          [action.workspaceId]: action.threads,
-        },
-      };
-    }
-    case "setThreadListLoading":
-      return {
-        ...state,
-        threadListLoadingByWorkspace: {
-          ...state.threadListLoadingByWorkspace,
-          [action.workspaceId]: action.isLoading,
-        },
-      };
-    case "setThreadTokenUsage":
-      return {
-        ...state,
-        tokenUsageByThread: {
-          ...state.tokenUsageByThread,
-          [action.threadId]: action.tokenUsage,
-        },
-      };
-    case "setRateLimits":
-      return {
-        ...state,
-        rateLimitsByWorkspace: {
-          ...state.rateLimitsByWorkspace,
-          [action.workspaceId]: action.rateLimits,
-        },
-      };
-    case "setThreadPlan":
-      return {
-        ...state,
-        planByThread: {
-          ...state.planByThread,
-          [action.threadId]: action.plan,
-        },
-      };
-    case "clearThreadPlan":
-      return {
-        ...state,
-        planByThread: {
-          ...state.planByThread,
-          [action.threadId]: null,
-        },
-      };
-    default:
-      return state;
-  }
-}
-
 type UseThreadsOptions = {
   activeWorkspace: WorkspaceInfo | null;
   onWorkspaceConnected: (id: string) => void;
@@ -608,6 +82,25 @@ type UseThreadsOptions = {
 
 function asString(value: unknown) {
   return typeof value === "string" ? value : value ? String(value) : "";
+}
+
+function extractRpcErrorMessage(response: unknown) {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+  const record = response as Record<string, unknown>;
+  if (!record.error) {
+    return null;
+  }
+  const errorValue = record.error;
+  if (typeof errorValue === "string") {
+    return errorValue;
+  }
+  if (typeof errorValue === "object" && errorValue) {
+    const message = asString((errorValue as Record<string, unknown>).message);
+    return message || "Request failed.";
+  }
+  return "Request failed.";
 }
 
 function parseReviewTarget(input: string) {
@@ -828,288 +321,6 @@ function formatReviewLabel(target: ReturnType<typeof parseReviewTarget>) {
     : instructions;
 }
 
-function buildConversationItem(item: Record<string, unknown>): ConversationItem | null {
-  const type = asString(item.type);
-  const id = asString(item.id);
-  if (!id || !type) {
-    return null;
-  }
-  if (type === "agentMessage" || type === "userMessage") {
-    return null;
-  }
-  if (type === "reasoning") {
-    const summary = asString(item.summary ?? "");
-    const content = Array.isArray(item.content)
-      ? item.content.map((entry) => asString(entry)).join("\n")
-      : asString(item.content ?? "");
-    return { id, kind: "reasoning", summary, content };
-  }
-  if (type === "commandExecution") {
-    const command = Array.isArray(item.command)
-      ? item.command.map((part) => asString(part)).join(" ")
-      : asString(item.command ?? "");
-    return {
-      id,
-      kind: "tool",
-      toolType: type,
-      title: command ? `Command: ${command}` : "Command",
-      detail: asString(item.cwd ?? ""),
-      status: asString(item.status ?? ""),
-      output: asString(item.aggregatedOutput ?? ""),
-    };
-  }
-  if (type === "fileChange") {
-    const changes = Array.isArray(item.changes) ? item.changes : [];
-    const normalizedChanges = changes
-      .map((change) => {
-        const path = asString(change?.path ?? "");
-        const kind = change?.kind as Record<string, unknown> | string | undefined;
-        const kindType =
-          typeof kind === "string"
-            ? kind
-            : typeof kind === "object" && kind
-              ? asString((kind as Record<string, unknown>).type ?? "")
-              : "";
-        const normalizedKind = kindType ? kindType.toLowerCase() : "";
-        const diff = asString(change?.diff ?? "");
-        return { path, kind: normalizedKind || undefined, diff: diff || undefined };
-      })
-      .filter((change) => change.path);
-    const formattedChanges = normalizedChanges
-      .map((change) => {
-        const prefix =
-          change.kind === "add"
-            ? "A"
-            : change.kind === "delete"
-              ? "D"
-              : change.kind
-                ? "M"
-                : "";
-        return [prefix, change.path].filter(Boolean).join(" ");
-      })
-      .filter(Boolean);
-    const paths = formattedChanges.join(", ");
-    const diffOutput = normalizedChanges
-      .map((change) => change.diff ?? "")
-      .filter(Boolean)
-      .join("\n\n");
-    return {
-      id,
-      kind: "tool",
-      toolType: type,
-      title: "File changes",
-      detail: paths || "Pending changes",
-      status: asString(item.status ?? ""),
-      output: diffOutput,
-      changes: normalizedChanges,
-    };
-  }
-  if (type === "mcpToolCall") {
-    const server = asString(item.server ?? "");
-    const tool = asString(item.tool ?? "");
-    const args = item.arguments ? JSON.stringify(item.arguments, null, 2) : "";
-    return {
-      id,
-      kind: "tool",
-      toolType: type,
-      title: `Tool: ${server}${tool ? ` / ${tool}` : ""}`,
-      detail: args,
-      status: asString(item.status ?? ""),
-      output: asString(item.result ?? item.error ?? ""),
-    };
-  }
-  if (type === "webSearch") {
-    return {
-      id,
-      kind: "tool",
-      toolType: type,
-      title: "Web search",
-      detail: asString(item.query ?? ""),
-      status: "",
-      output: "",
-    };
-  }
-  if (type === "imageView") {
-    return {
-      id,
-      kind: "tool",
-      toolType: type,
-      title: "Image view",
-      detail: asString(item.path ?? ""),
-      status: "",
-      output: "",
-    };
-  }
-  if (type === "enteredReviewMode" || type === "exitedReviewMode") {
-    return {
-      id,
-      kind: "review",
-      state: type === "enteredReviewMode" ? "started" : "completed",
-      text: asString(item.review ?? ""),
-    };
-  }
-  return null;
-}
-
-function userInputsToText(inputs: Array<Record<string, unknown>>) {
-  return inputs
-    .map((input) => {
-      const type = asString(input.type);
-      if (type === "text") {
-        return asString(input.text);
-      }
-      if (type === "skill") {
-        const name = asString(input.name);
-        return name ? `$${name}` : "";
-      }
-      if (type === "image" || type === "localImage") {
-        return "[image]";
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-}
-
-function buildConversationItemFromThreadItem(
-  item: Record<string, unknown>,
-): ConversationItem | null {
-  const type = asString(item.type);
-  const id = asString(item.id);
-  if (!id || !type) {
-    return null;
-  }
-  if (type === "userMessage") {
-    const content = Array.isArray(item.content) ? item.content : [];
-    const text = userInputsToText(content);
-    return {
-      id,
-      kind: "message",
-      role: "user",
-      text: text || "[message]",
-    };
-  }
-  if (type === "agentMessage") {
-    return {
-      id,
-      kind: "message",
-      role: "assistant",
-      text: asString(item.text),
-    };
-  }
-  if (type === "reasoning") {
-    const summary = Array.isArray(item.summary)
-      ? item.summary.map((entry) => asString(entry)).join("\n")
-      : asString(item.summary ?? "");
-    const content = Array.isArray(item.content)
-      ? item.content.map((entry) => asString(entry)).join("\n")
-      : asString(item.content ?? "");
-    return { id, kind: "reasoning", summary, content };
-  }
-  return buildConversationItem(item);
-}
-
-function buildItemsFromThread(thread: Record<string, unknown>) {
-  const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  const items: ConversationItem[] = [];
-  turns.forEach((turn) => {
-    const turnRecord = turn as Record<string, unknown>;
-    const turnItems = Array.isArray(turnRecord.items)
-      ? (turnRecord.items as Record<string, unknown>[])
-      : [];
-    turnItems.forEach((item) => {
-      const converted = buildConversationItemFromThreadItem(item);
-      if (converted) {
-        items.push(converted);
-      }
-    });
-  });
-  return items;
-}
-
-function isReviewingFromThread(thread: Record<string, unknown>) {
-  const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  let reviewing = false;
-  turns.forEach((turn) => {
-    const turnRecord = turn as Record<string, unknown>;
-    const turnItems = Array.isArray(turnRecord.items)
-      ? (turnRecord.items as Record<string, unknown>[])
-      : [];
-    turnItems.forEach((item) => {
-      const type = asString(item?.type ?? "");
-      if (type === "enteredReviewMode") {
-        reviewing = true;
-      } else if (type === "exitedReviewMode") {
-        reviewing = false;
-      }
-    });
-  });
-  return reviewing;
-}
-
-function previewThreadName(text: string, fallback: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  return trimmed;
-}
-
-function chooseRicherItem(remote: ConversationItem, local: ConversationItem) {
-  if (remote.kind !== local.kind) {
-    return remote;
-  }
-  if (remote.kind === "message" && local.kind === "message") {
-    return local.text.length > remote.text.length ? local : remote;
-  }
-  if (remote.kind === "reasoning" && local.kind === "reasoning") {
-    const remoteLength = remote.summary.length + remote.content.length;
-    const localLength = local.summary.length + local.content.length;
-    return localLength > remoteLength ? local : remote;
-  }
-  if (remote.kind === "tool" && local.kind === "tool") {
-    const remoteLength = (remote.output ?? "").length;
-    const localLength = (local.output ?? "").length;
-    const base = localLength > remoteLength ? local : remote;
-    return {
-      ...base,
-      status: remote.status ?? local.status,
-      output: localLength > remoteLength ? local.output : remote.output,
-      changes: remote.changes ?? local.changes,
-    };
-  }
-  if (remote.kind === "diff" && local.kind === "diff") {
-    const useLocal = local.diff.length > remote.diff.length;
-    return {
-      ...remote,
-      diff: useLocal ? local.diff : remote.diff,
-      status: remote.status ?? local.status,
-    };
-  }
-  return remote;
-}
-
-function mergeThreadItems(
-  remoteItems: ConversationItem[],
-  localItems: ConversationItem[],
-) {
-  if (!localItems.length) {
-    return remoteItems;
-  }
-  const byId = new Map(remoteItems.map((item) => [item.id, item]));
-  const merged = remoteItems.map((item) => {
-    const local = localItems.find((entry) => entry.id === item.id);
-    return local ? chooseRicherItem(item, local) : item;
-  });
-  localItems.forEach((item) => {
-    if (!byId.has(item.id)) {
-      merged.push(item);
-    }
-  });
-  return merged;
-}
-
 export function useThreads({
   activeWorkspace,
   onWorkspaceConnected,
@@ -1199,6 +410,64 @@ export function useThreads({
     [activeWorkspaceId, onDebug],
   );
 
+  const pushThreadErrorMessage = useCallback(
+    (threadId: string, message: string) => {
+      dispatch({
+        type: "addAssistantMessage",
+        threadId,
+        text: message,
+      });
+      if (threadId !== activeThreadId) {
+        dispatch({ type: "markUnread", threadId, hasUnread: true });
+      }
+    },
+    [activeThreadId],
+  );
+
+  const safeMessageActivity = useCallback(() => {
+    try {
+      void onMessageActivity?.();
+    } catch {
+      // Ignore refresh errors to avoid breaking the UI.
+    }
+  }, [onMessageActivity]);
+
+  const handleItemUpdate = useCallback(
+    (
+      workspaceId: string,
+      threadId: string,
+      item: Record<string, unknown>,
+      markProcessing: boolean,
+    ) => {
+      dispatch({ type: "ensureThread", workspaceId, threadId });
+      if (markProcessing) {
+        dispatch({ type: "markProcessing", threadId, isProcessing: true });
+      }
+      const itemType = asString(item?.type ?? "");
+      if (itemType === "enteredReviewMode") {
+        dispatch({ type: "markReviewing", threadId, isReviewing: true });
+      } else if (itemType === "exitedReviewMode") {
+        dispatch({ type: "markReviewing", threadId, isReviewing: false });
+        dispatch({ type: "markProcessing", threadId, isProcessing: false });
+      }
+      const converted = buildConversationItem(item);
+      if (converted) {
+        dispatch({ type: "upsertItem", threadId, item: converted });
+      }
+      safeMessageActivity();
+    },
+    [safeMessageActivity],
+  );
+
+  const handleToolOutputDelta = useCallback(
+    (threadId: string, itemId: string, delta: string) => {
+      dispatch({ type: "markProcessing", threadId, isProcessing: true });
+      dispatch({ type: "appendToolOutput", threadId, itemId, delta });
+      safeMessageActivity();
+    },
+    [safeMessageActivity],
+  );
+
   const handleWorkspaceConnected = useCallback(
     (workspaceId: string) => {
       onWorkspaceConnected(workspaceId);
@@ -1251,14 +520,18 @@ export function useThreads({
         itemId: string;
         text: string;
       }) => {
+        const timestamp = Date.now();
         dispatch({ type: "ensureThread", workspaceId, threadId });
         dispatch({ type: "completeAgentMessage", threadId, itemId, text });
+        dispatch({
+          type: "setLastAgentMessage",
+          threadId,
+          text,
+          timestamp,
+        });
         dispatch({ type: "markProcessing", threadId, isProcessing: false });
-        try {
-          void onMessageActivity?.();
-        } catch {
-          // Ignore refresh errors to avoid breaking the UI.
-        }
+        recordThreadActivity(workspaceId, threadId, timestamp);
+        safeMessageActivity();
         if (threadId !== activeThreadId) {
           dispatch({ type: "markUnread", threadId, hasUnread: true });
         }
@@ -1268,47 +541,14 @@ export function useThreads({
         threadId: string,
         item: Record<string, unknown>,
       ) => {
-        dispatch({ type: "ensureThread", workspaceId, threadId });
-        dispatch({ type: "markProcessing", threadId, isProcessing: true });
-        const itemType = asString(item?.type ?? "");
-        if (itemType === "enteredReviewMode") {
-          dispatch({ type: "markReviewing", threadId, isReviewing: true });
-        } else if (itemType === "exitedReviewMode") {
-          dispatch({ type: "markReviewing", threadId, isReviewing: false });
-          dispatch({ type: "markProcessing", threadId, isProcessing: false });
-        }
-        const converted = buildConversationItem(item);
-        if (converted) {
-          dispatch({ type: "upsertItem", threadId, item: converted });
-        }
-        try {
-          void onMessageActivity?.();
-        } catch {
-          // Ignore refresh errors to avoid breaking the UI.
-        }
+        handleItemUpdate(workspaceId, threadId, item, true);
       },
       onItemCompleted: (
         workspaceId: string,
         threadId: string,
         item: Record<string, unknown>,
       ) => {
-        dispatch({ type: "ensureThread", workspaceId, threadId });
-        const itemType = asString(item?.type ?? "");
-        if (itemType === "enteredReviewMode") {
-          dispatch({ type: "markReviewing", threadId, isReviewing: true });
-        } else if (itemType === "exitedReviewMode") {
-          dispatch({ type: "markReviewing", threadId, isReviewing: false });
-          dispatch({ type: "markProcessing", threadId, isProcessing: false });
-        }
-        const converted = buildConversationItem(item);
-        if (converted) {
-          dispatch({ type: "upsertItem", threadId, item: converted });
-        }
-        try {
-          void onMessageActivity?.();
-        } catch {
-          // Ignore refresh errors to avoid breaking the UI.
-        }
+        handleItemUpdate(workspaceId, threadId, item, false);
       },
       onReasoningSummaryDelta: (
         _workspaceId: string,
@@ -1332,13 +572,7 @@ export function useThreads({
         itemId: string,
         delta: string,
       ) => {
-        dispatch({ type: "markProcessing", threadId, isProcessing: true });
-        dispatch({ type: "appendToolOutput", threadId, itemId, delta });
-        try {
-          void onMessageActivity?.();
-        } catch {
-          // Ignore refresh errors to avoid breaking the UI.
-        }
+        handleToolOutputDelta(threadId, itemId, delta);
       },
       onFileChangeOutputDelta: (
         _workspaceId: string,
@@ -1346,13 +580,7 @@ export function useThreads({
         itemId: string,
         delta: string,
       ) => {
-        dispatch({ type: "markProcessing", threadId, isProcessing: true });
-        dispatch({ type: "appendToolOutput", threadId, itemId, delta });
-        try {
-          void onMessageActivity?.();
-        } catch {
-          // Ignore refresh errors to avoid breaking the UI.
-        }
+        handleToolOutputDelta(threadId, itemId, delta);
       },
       onTurnStarted: (workspaceId: string, threadId: string, turnId: string) => {
         dispatch({
@@ -1406,13 +634,40 @@ export function useThreads({
           rateLimits: normalizeRateLimits(rateLimits),
         });
       },
+      onTurnError: (
+        workspaceId: string,
+        threadId: string,
+        _turnId: string,
+        payload: { message: string; willRetry: boolean },
+      ) => {
+        if (payload.willRetry) {
+          return;
+        }
+        dispatch({ type: "ensureThread", workspaceId, threadId });
+        dispatch({ type: "markProcessing", threadId, isProcessing: false });
+        dispatch({ type: "markReviewing", threadId, isReviewing: false });
+        dispatch({
+          type: "setActiveTurnId",
+          threadId,
+          turnId: null,
+        });
+        const message = payload.message
+          ? `Turn failed: ${payload.message}`
+          : "Turn failed.";
+        pushThreadErrorMessage(threadId, message);
+        safeMessageActivity();
+      },
     }),
     [
       activeThreadId,
       activeWorkspaceId,
       handleWorkspaceConnected,
+      handleItemUpdate,
+      handleToolOutputDelta,
       onDebug,
-      onMessageActivity,
+      recordThreadActivity,
+      pushThreadErrorMessage,
+      safeMessageActivity,
     ],
   );
 
@@ -1438,13 +693,13 @@ export function useThreads({
         });
         const thread = response.result?.thread ?? response.thread;
         const threadId = String(thread?.id ?? "");
-      if (threadId) {
-        dispatch({ type: "ensureThread", workspaceId, threadId });
-        dispatch({ type: "setActiveThreadId", workspaceId, threadId });
-        loadedThreads.current[threadId] = true;
-        return threadId;
-      }
-      return null;
+        if (threadId) {
+          dispatch({ type: "ensureThread", workspaceId, threadId });
+          dispatch({ type: "setActiveThreadId", workspaceId, threadId });
+          loadedThreads.current[threadId] = true;
+          return threadId;
+        }
+        return null;
       } catch (error) {
         onDebug?.({
           id: `${Date.now()}-client-thread-start-error`,
@@ -1521,6 +776,23 @@ export function useThreads({
               name: previewThreadName(preview, `Agent ${threadId.slice(0, 4)}`),
             });
           }
+          const lastAgentMessage = [...mergedItems]
+            .reverse()
+            .find(
+              (item) => item.kind === "message" && item.role === "assistant",
+            ) as ConversationItem | undefined;
+          const lastText =
+            lastAgentMessage && lastAgentMessage.kind === "message"
+              ? lastAgentMessage.text
+              : preview;
+          if (lastText) {
+            dispatch({
+              type: "setLastAgentMessage",
+              threadId,
+              text: lastText,
+              timestamp: getThreadTimestamp(thread),
+            });
+          }
         }
         loadedThreads.current[threadId] = true;
         return threadId;
@@ -1560,9 +832,9 @@ export function useThreads({
         do {
           const response =
             (await listThreadsService(
-            workspace.id,
-            cursor,
-            pageSize,
+              workspace.id,
+              cursor,
+              pageSize,
             )) as Record<string, unknown>;
           onDebug?.({
             id: `${Date.now()}-server-thread-list`,
@@ -1622,6 +894,19 @@ export function useThreads({
           workspaceId: workspace.id,
           threads: summaries,
         });
+        uniqueThreads.forEach((thread) => {
+          const threadId = String(thread?.id ?? "");
+          const preview = asString(thread?.preview ?? "").trim();
+          if (!threadId || !preview) {
+            return;
+          }
+          dispatch({
+            type: "setLastAgentMessage",
+            threadId,
+            text: preview,
+            timestamp: getThreadTimestamp(thread),
+          });
+        });
       } catch (error) {
         onDebug?.({
           id: `${Date.now()}-client-thread-list-error`,
@@ -1641,19 +926,30 @@ export function useThreads({
     [onDebug],
   );
 
+  const ensureThreadForActiveWorkspace = useCallback(async () => {
+    if (!activeWorkspace) {
+      return null;
+    }
+    let threadId = activeThreadId;
+    if (!threadId) {
+      threadId = await startThreadForWorkspace(activeWorkspace.id);
+      if (!threadId) {
+        return null;
+      }
+    } else if (!loadedThreads.current[threadId]) {
+      await resumeThreadForWorkspace(activeWorkspace.id, threadId);
+    }
+    return threadId;
+  }, [activeWorkspace, activeThreadId, resumeThreadForWorkspace, startThreadForWorkspace]);
+
   const sendUserMessage = useCallback(
     async (text: string) => {
       if (!activeWorkspace || !text.trim()) {
         return;
       }
-      let threadId = activeThreadId;
+      const threadId = await ensureThreadForActiveWorkspace();
       if (!threadId) {
-        threadId = await startThread();
-        if (!threadId) {
-          return;
-        }
-      } else if (!loadedThreads.current[threadId]) {
-        await resumeThreadForWorkspace(activeWorkspace.id, threadId);
+        return;
       }
 
       const messageText = text.trim();
@@ -1671,11 +967,7 @@ export function useThreads({
         name: previewThreadName(messageText, `Agent ${threadId.slice(0, 4)}`),
       });
       dispatch({ type: "markProcessing", threadId, isProcessing: true });
-      try {
-        void onMessageActivity?.();
-      } catch {
-        // Ignore refresh errors to avoid breaking the UI.
-      }
+      safeMessageActivity();
       onDebug?.({
         id: `${Date.now()}-client-turn-start`,
         timestamp: Date.now(),
@@ -1704,15 +996,30 @@ export function useThreads({
           label: "turn/start response",
           payload: response,
         });
+        const rpcError = extractRpcErrorMessage(response);
+        if (rpcError) {
+          dispatch({ type: "markProcessing", threadId, isProcessing: false });
+          dispatch({ type: "setActiveTurnId", threadId, turnId: null });
+          pushThreadErrorMessage(threadId, `Turn failed to start: ${rpcError}`);
+          safeMessageActivity();
+          return;
+        }
         const result = (response?.result ?? response) as Record<string, unknown>;
         const turn = (result?.turn ?? response?.turn ?? null) as
           | Record<string, unknown>
           | null;
         const turnId = asString(turn?.id ?? "");
-        if (turnId) {
-          dispatch({ type: "setActiveTurnId", threadId, turnId });
+        if (!turnId) {
+          dispatch({ type: "markProcessing", threadId, isProcessing: false });
+          dispatch({ type: "setActiveTurnId", threadId, turnId: null });
+          pushThreadErrorMessage(threadId, "Turn failed to start.");
+          safeMessageActivity();
+          return;
         }
+        dispatch({ type: "setActiveTurnId", threadId, turnId });
       } catch (error) {
+        dispatch({ type: "markProcessing", threadId, isProcessing: false });
+        dispatch({ type: "setActiveTurnId", threadId, turnId: null });
         onDebug?.({
           id: `${Date.now()}-client-turn-start-error`,
           timestamp: Date.now(),
@@ -1720,20 +1027,23 @@ export function useThreads({
           label: "turn/start error",
           payload: error instanceof Error ? error.message : String(error),
         });
-        throw error;
+        pushThreadErrorMessage(
+          threadId,
+          error instanceof Error ? error.message : String(error),
+        );
+        safeMessageActivity();
       }
     },
     [
       activeWorkspace,
-      activeThreadId,
       effort,
       accessMode,
       model,
       onDebug,
-      onMessageActivity,
+      pushThreadErrorMessage,
       recordThreadActivity,
-      startThread,
-      resumeThreadForWorkspace,
+      ensureThreadForActiveWorkspace,
+      safeMessageActivity,
     ],
   );
 
@@ -1792,14 +1102,9 @@ export function useThreads({
       if (!activeWorkspace || !text.trim()) {
         return;
       }
-      let threadId = activeThreadId;
+      const threadId = await ensureThreadForActiveWorkspace();
       if (!threadId) {
-        threadId = await startThread();
-        if (!threadId) {
-          return;
-        }
-      } else if (!loadedThreads.current[threadId]) {
-        await resumeThreadForWorkspace(activeWorkspace.id, threadId);
+        return;
       }
 
       const target = parseReviewTarget(text);
@@ -1815,11 +1120,7 @@ export function useThreads({
           text: formatReviewLabel(target),
         },
       });
-      try {
-        void onMessageActivity?.();
-      } catch {
-        // Ignore refresh errors to avoid breaking the UI.
-      }
+      safeMessageActivity();
       onDebug?.({
         id: `${Date.now()}-client-review-start`,
         timestamp: Date.now(),
@@ -1845,6 +1146,15 @@ export function useThreads({
           label: "review/start response",
           payload: response,
         });
+        const rpcError = extractRpcErrorMessage(response);
+        if (rpcError) {
+          dispatch({ type: "markProcessing", threadId, isProcessing: false });
+          dispatch({ type: "markReviewing", threadId, isReviewing: false });
+          dispatch({ type: "setActiveTurnId", threadId, turnId: null });
+          pushThreadErrorMessage(threadId, `Review failed to start: ${rpcError}`);
+          safeMessageActivity();
+          return;
+        }
       } catch (error) {
         dispatch({ type: "markProcessing", threadId, isProcessing: false });
         dispatch({ type: "markReviewing", threadId, isReviewing: false });
@@ -1855,16 +1165,19 @@ export function useThreads({
           label: "review/start error",
           payload: error instanceof Error ? error.message : String(error),
         });
-        throw error;
+        pushThreadErrorMessage(
+          threadId,
+          error instanceof Error ? error.message : String(error),
+        );
+        safeMessageActivity();
       }
     },
     [
       activeWorkspace,
-      activeThreadId,
+      ensureThreadForActiveWorkspace,
       onDebug,
-      onMessageActivity,
-      startThread,
-      resumeThreadForWorkspace,
+      pushThreadErrorMessage,
+      safeMessageActivity,
     ],
   );
 
@@ -1929,6 +1242,7 @@ export function useThreads({
     tokenUsageByThread: state.tokenUsageByThread,
     rateLimitsByWorkspace: state.rateLimitsByWorkspace,
     planByThread: state.planByThread,
+    lastAgentMessageByThread: state.lastAgentMessageByThread,
     refreshAccountRateLimits,
     interruptTurn,
     removeThread,

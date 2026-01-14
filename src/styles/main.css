@@ -21,7 +21,7 @@
   align-items: center;
   gap: 16px;
   min-width: 0;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 
 .workspace-header {
@@ -37,7 +37,7 @@
   padding: 10px 32px 8px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-topbar);
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
   grid-column: 1;
   grid-row: 1;
   position: sticky;
@@ -57,10 +57,12 @@
   gap: 16px;
   min-width: 0;
   flex: 1;
+  -webkit-app-region: no-drag;
 }
 
 .main-topbar-left .icon-button {
   padding: 6px 10px;
+  -webkit-app-region: no-drag;
 }
 
 .main-topbar-left .back-button {
@@ -400,6 +402,7 @@
   display: flex;
   gap: 12px;
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .content {

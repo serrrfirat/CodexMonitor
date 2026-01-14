@@ -8,6 +8,7 @@ CodexMonitor is a macOS Tauri app that orchestrates Codex agents across local wo
 - `src/App.tsx`: composition root
 - `src/components/`: presentational UI components
 - `src/hooks/`: state + event wiring
+- `src/utils/threadItems.ts`: thread item normalization + conversion
 - `src/services/tauri.ts`: Tauri IPC wrapper
 - `src/styles/`: split CSS by area
 - `src/types.ts`: shared types
@@ -19,6 +20,7 @@ CodexMonitor is a macOS Tauri app that orchestrates Codex agents across local wo
 - **Composition root**: keep orchestration in `src/App.tsx`; avoid logic in components.
 - **Components**: presentational only; props in, UI out; no Tauri IPC calls.
 - **Hooks**: own state, side-effects, and event wiring (e.g., app-server events).
+- **Utils**: pure helpers live in `src/utils/` (no React hooks here).
 - **Services**: all Tauri IPC goes through `src/services/tauri.ts`.
 - **Types**: shared UI data types live in `src/types.ts`.
 - **Styles**: one CSS file per UI area in `src/styles/` (no global refactors in components).
@@ -74,6 +76,8 @@ to the next minor version.
 - Git diff behavior: `src/hooks/useGitStatus.ts` (polling + activity refresh) and `src-tauri/src/lib.rs` (libgit2 status).
 - Thread history rendering: `src/hooks/useThreads.ts` converts `thread/resume` turns into UI items.
   - Thread names update on first user message (preview-based), and on resume if a preview exists.
+- Thread item parsing/normalization: `src/utils/threadItems.ts`.
+- Thread state reducer: `src/hooks/useThreadsReducer.ts`.
 
 ## Notes
 
